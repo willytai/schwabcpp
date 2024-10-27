@@ -27,24 +27,26 @@ static std::string tokenCacheFile = ".tokens.json";
 
 }
 
-Client::Client(const std::string& appKey, const std::string& appSecret) :
-    m_key(appKey),
-    m_secret(appSecret),
-    m_stopCheckerDaemon(false)
+Client::Client(const std::filesystem::path& appCredentialPath)
+    : m_stopCheckerDaemon(false)
 {
     // we are going to to a bunch of curl, init it here
     curl_global_init(CURL_GLOBAL_DEFAULT);
+
+    loadCredentials(appCredentialPath);
 
     init();
 }
 
 Client::~Client()
 {
+    LOG_INFO("Stopping client.");
+
     // reset streamer
     m_streamer.reset();
 
     // stop the token checker daemon
-    LOG_INFO("Shutting down token checker daemon...");
+    LOG_TRACE("Shutting down token checker daemon...");
     m_stopCheckerDaemon = true;
 
     // curl cleanup
@@ -64,6 +66,25 @@ void Client::startStreamer()
 void Client::stopStreamer()
 {
     m_streamer->stop();
+}
+
+void Client::loadCredentials(const std::filesystem::path& appCredentialPath)
+{
+    std::ifstream file(appCredentialPath);
+    if (file.is_open()) {
+        json credentialData;
+        file >> credentialData;
+
+        if (credentialData.contains("app_key") &&
+            credentialData.contains("app_secret")) {
+            m_key = credentialData["app_key"];
+            m_secret = credentialData["app_secret"];
+        } else {
+            LOG_FATAL("App credentials missing!!");
+        }
+    } else {
+        LOG_FATAL("Unable to open the app credentials file: {}", appCredentialPath.string());
+    }
 }
 
 // -- OAuth Flow
@@ -291,7 +312,7 @@ void Client::checkTokens()
         std::this_thread::sleep_for(std::chrono::seconds(30));
     }
 
-    LOG_INFO("Token checker daemon stopped.");
+    LOG_TRACE("Token checker daemon stopped.");
 }
 
 // -- Thread Safe Token Access

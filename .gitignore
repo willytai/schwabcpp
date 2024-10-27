@@ -1,2 +1,5 @@
 .authCode
 build
+.cache
+tokens.json
+.appCredentials.json

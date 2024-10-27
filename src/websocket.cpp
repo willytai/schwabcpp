@@ -10,6 +10,8 @@ static std::string __path = "/ws";
 namespace l2viz {
 
 Websocket::Websocket(const std::string& url)
+    : m_sslContext(boost::asio::ssl::context::sslv23)
+    , m_workGuard(net::make_work_guard(m_ioContext))
 {
     LOG_INFO("Initializing websocket.");
 
@@ -25,85 +27,60 @@ Websocket::Websocket(const std::string& url)
         m_host = m_host.substr(0, pos);
     }
 
-    connect();
+    // ssl context settings
+    m_sslContext.set_verify_mode(boost::asio::ssl::verify_peer);
+    m_sslContext.load_verify_file("/etc/ssl/cert.pem");  // THIS IS REQUIRED
 }
 
 Websocket::~Websocket()
 {
-    disconnect();
-}
+    LOG_TRACE("Disconnecting websocket session.");
+    m_session->asyncDisconnect();
 
-void Websocket::connect()
-{
-    // This is very annoying. Had to do this from the very level to make it work.
-    // The ssl ca certificate file path doesn't load automatically. Need to manually specifiy.
-    try {
-        using tcp = boost::asio::ip::tcp;
-
-        boost::asio::io_context ioContext;
-
-        // address resolver
-        tcp::resolver resolver(ioContext);
-
-        // ssl context
-        boost::asio::ssl::context ctx(boost::asio::ssl::context::sslv23);
-        ctx.set_verify_mode(boost::asio::ssl::verify_peer);
-        ctx.load_verify_file("/etc/ssl/cert.pem");  // THIS IS REQUIRED
-
-        // ssl stream
-        boost::asio::ssl::stream<beast::tcp_stream> stream(ioContext, ctx);
-
-        // resolve and connect
-        beast::get_lowest_layer(stream).connect(resolver.resolve(m_host, __port));
-
-        // ssl handshake
-        stream.handshake(boost::asio::ssl::stream_base::client);
-
-        m_socketStream = std::make_unique<ConnectionHandle>(std::move(stream));
-        m_socketStream->handshake(m_host, __path);
-
-        LOG_INFO("Connection established with {}.", m_host);
-    } catch (const std::exception& e) {
-        m_socketStream.reset();
-        LOG_ERROR("Failed to connect to {}. Error: {}", m_host, e.what());
+    LOG_TRACE("Stopping websocket io context.");
+    // not using boost::asio::io_context::stop so that the io context
+    // will wait for the pending disconnect call to finish before exiting
+    m_workGuard.reset();
+    if (m_ioContextThread.joinable()) {
+        m_ioContextThread.join();
     }
 }
 
-void Websocket::send(const std::string& request)
+void Websocket::asyncConnect(std::function<void()> onConnected)
 {
-    if (m_socketStream->is_open()) {
-        m_socketStream->write(boost::asio::buffer(request));
-    }
-}
+    // session
+    m_session = std::make_shared<WebsocketSession>(
+        m_ioContext,
+        m_sslContext,
+        m_host,
+        __port,
+        __path
+    );
 
-void Websocket::receive(std::function<void(const std::string&)> receiver)
-{
-    beast::flat_buffer buffer;
-    m_socketStream->read(buffer);
-    receiver(beast::buffers_to_string(buffer.data()));
-}
-
-void Websocket::disconnect()
-{
-    if (isConnected()) {
-        LOG_TRACE("Closing websocket.");
-        try {
-            // close the connection
-            m_socketStream->close(beast::websocket::close_code::normal);
-
-            // shutdown the ssl stream
-            beast::get_lowest_layer(*m_socketStream).close();
-
-            m_socketStream.reset();
-
-            LOG_INFO("Disconnected from {}.", m_host);
-        } catch (const std::exception& e) {
-            LOG_ERROR("Failed to disconnect from {}, Error: {}", m_host, e.what());
+    // queue connect call
+    m_session->asyncConnect(onConnected);
+    // run the io context
+    m_ioContextThread = std::thread(
+        [this]() {
+            m_ioContext.run();
+            LOG_TRACE("IO context thread exiting.");
         }
-        m_socketStream->close(beast::websocket::close_code::normal);
-    } else {
-        LOG_TRACE("No active connection to disconnect.");
-    }
+    );
+}
+
+void Websocket::asyncSend(const std::string& request, std::function<void()> callback)
+{
+    m_session->asyncSend(request, callback);
+}
+
+void Websocket::asyncReceive(std::function<void(const std::string&)> callback)
+{
+    m_session->asyncReceive(callback);
+}
+
+void Websocket::startReceiverLoop(std::function<void(const std::string&)> callback)
+{
+    m_session->startReceiverLoop(callback);
 }
 
 }

@@ -6,6 +6,7 @@
 #include <mutex>
 #include <thread>
 #include <memory>
+#include <filesystem>
 
 namespace l2viz {
 
@@ -16,13 +17,14 @@ class Streamer;
 class Client
 {
 public:
-                                Client(const std::string& appKey, const std::string& appSecret);
+                                Client(const std::filesystem::path& appCredentialPath = "./.appCredentials.json");
                                 ~Client();
 
     void                        startStreamer();
     void                        stopStreamer();
 
 private:
+    void                        loadCredentials(const std::filesystem::path& appCredentialPath);
     void                        init();
 
     // --- OAuth Flow ---
@@ -50,7 +52,7 @@ private:
     std::string                 m_refreshToken;
     clock::time_point           m_refreshTokenTS;
 
-    // --- app credentials --- (TODO: should be moved out)
+    // --- app credentials ---
     std::string                 m_key;
     std::string                 m_secret;
 

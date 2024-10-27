@@ -7,10 +7,11 @@ namespace l2viz {
 
 using json = nlohmann::json;
 
-Streamer::Streamer(Client* client) :
-    m_client(client),
-    m_requestId(0),
-    m_isActive(false)
+Streamer::Streamer(Client* client)
+    : m_client(client)
+    , m_requestId(0)
+    , m_isActive(false)
+    , m_runRequestDaemon(false)
 {
     LOG_INFO("Initializing streamer.");
 
@@ -69,35 +70,73 @@ Streamer::Streamer(Client* client) :
 
 Streamer::~Streamer()
 {
-    m_websocket.reset();
+    stop();
+
+    // join here
+    if (m_requestDaemon.joinable()) {
+        m_requestDaemon.join();
+    }
 }
 
 void Streamer::start()
 {
     LOG_INFO("Starting streamer.");
 
-    // instantiating the websocket with the url triggers a "blocking connect" operation
+    // create the websocket
     m_websocket = std::make_unique<Websocket>(m_streamerInfo[StreamerInfoKey::SocketURL]);
+    // connect and login
+    m_websocket->asyncConnect(std::bind(&Streamer::onWebsocketConnected, this));
 
-    // continue if connection successful
-    if (m_websocket->isConnected()) {
-        // login
-        LOG_INFO("Logging in...");
-        std::string loginRequest = streamRequest(
-            RequestServiceType::ADMIN,
-            RequestCommandType::LOGIN,
-            {
-                { "Authorization", m_client->getAccessToken() },
-                { "SchwabClientChannel", m_streamerInfo[StreamerInfoKey::Channel] },
-                { "SchwabClientFunctionId", m_streamerInfo[StreamerInfoKey::FunctionId] },
-            }
-        );
+    // launch the request daemon
+    m_runRequestDaemon = true;
+    m_requestDaemon = std::thread(
+        [this] { sendRequests(); }
+    );
 
-        // send (blocking)
-        m_websocket->send(loginRequest);
+    // TEST: test subscription
+    std::string testSubRequest1 = constructStreamRequest(
+        RequestServiceType::LEVELONE_EQUITIES,
+        RequestCommandType::SUBS,
+        {
+            { "keys", "SPY" },
+            { "fields", "0,1,2,3,33"  },
+        }
+    );
+    std::string testSubRequest2 = constructStreamRequest(
+        RequestServiceType::LEVELONE_EQUITIES,
+        RequestCommandType::ADD,
+        {
+            { "keys", "NVDA" },
+            { "fields", "0,1,2,3,33"  },
+        }
+    );
+    asyncRequest(testSubRequest1);
+    asyncRequest(testSubRequest2);
+}
 
-        // receive (blocking)
-        m_websocket->receive([this](const std::string& response) {
+void Streamer::onWebsocketConnected()
+{
+    LOG_TRACE("Websocket conncted callback triggered.");
+
+    // After websocket connected, we
+    // 1. login
+    // 2. start the receiving loop
+
+    std::string loginRequest = constructStreamRequest(
+        RequestServiceType::ADMIN,
+        RequestCommandType::LOGIN,
+        {
+            { "Authorization", m_client->getAccessToken() },
+            { "SchwabClientChannel", m_streamerInfo[StreamerInfoKey::Channel] },
+            { "SchwabClientFunctionId", m_streamerInfo[StreamerInfoKey::FunctionId] },
+        }
+    );
+
+    // queue the login request
+    m_websocket->asyncSend(loginRequest, [](){ LOG_INFO("Logging in..."); });
+    // queue the login response handler
+    m_websocket->asyncReceive(
+        [this](const std::string& response) {
             LOG_TRACE("Login response: {}", response);
 
             // bunch of error handling
@@ -123,72 +162,95 @@ void Streamer::start()
                             if (code != 0) {
                                 LOG_ERROR("Login failed. Error code: {}, Msg: {}", code, msg);
                             } else {
-                                m_isActive = true;
                                 LOG_INFO("Successfully logged in.");
+
+                                // notify the active status
+                                {
+                                    std::lock_guard<std::mutex> lock(m_mutex_active);
+                                    m_isActive = true;
+                                    m_cv.notify_all();
+                                }
+
+                                // now that we're logged in, start the receiver loop
+                                m_websocket->startReceiverLoop(
+                                    // TODO: this is where the stream data handler should go
+                                    [this](const std::string& data) {
+                                        LOG_INFO("Data: {}", data);
+                                    }
+                                );
                             }
                         }
                     }
                 }
             }
-        });
-
-        // start the receive loop if login successful
-        if (m_isActive) {
-            LOG_INFO("Launching stream receiver daemon.");
-            m_receiverDaemon = std::thread(&Streamer::receiver, this);
         }
-
-
-        // TEST: test subscription
-        std::string testSubRequest = streamRequest(
-            RequestServiceType::LEVELONE_EQUITIES,
-            RequestCommandType::SUBS,
-            {
-                { "keys", "AAPL" },
-                { "fields", "0,1,2,3,33"  },
-            }
-        );
-        m_websocket->send(testSubRequest);  // blocking for now
-        m_websocket->receive([](const std::string& response) {  // blocking for now
-            LOG_TRACE("Test subscription response: {}", response);
-        });
-    }
-}
-
-void Streamer::receiver()
-{
-    while (m_isActive) {
-        m_websocket->receive([](const std::string& response){
-            LOG_INFO("Receiver daemon: {}", response);
-        });
-    }
-
-    LOG_INFO("Receiver daemon stopped.");
+    );
 }
 
 void Streamer::stop()
 {
-    m_isActive = false;
-    if (m_receiverDaemon.joinable()) {
-        // send a logout request
-        m_websocket->send(
-            streamRequest(
-                RequestServiceType::ADMIN,
-                RequestCommandType::LOGOUT
-            )
-        );
-        LOG_INFO("Logged out.");
-
-        m_receiverDaemon.join();
-
-        LOG_INFO("Streamer stopped.");
+    // stop the request daemon if it is running
+    if (m_requestDaemon.joinable() && m_runRequestDaemon) {
+        LOG_TRACE("Stopping streamer request daemon.");
+        {
+            std::lock_guard<std::mutex> lock(m_mutex_runRequestDaemon);
+            m_runRequestDaemon = false;
+        }
+        m_cv.notify_all();
     }
 
-    // testing
-    m_websocket->disconnect();
+    // release websocket
+    m_websocket.reset();
 }
 
-std::string Streamer::streamRequest(
+void Streamer::asyncRequest(const std::string& request, std::function<void()> callback)
+{
+    // enqueue the request
+    std::unique_lock<std::mutex> lock(m_mutex_requestQ);
+    m_requestQueue.emplace(std::move(request), callback);
+    lock.unlock();
+    // notify
+    m_cv.notify_one();
+}
+
+void Streamer::sendRequests()
+{
+    while (m_runRequestDaemon) {
+
+        // wait until active (logged in)
+        {
+            std::unique_lock<std::mutex> lock(m_mutex_active);
+            m_cv.wait(lock, [this]{ return m_isActive || !m_runRequestDaemon; });
+
+            if (!m_runRequestDaemon) break;
+        }
+
+        // wait until request pending
+        std::unique_lock<std::mutex> lock(m_mutex_requestQ);
+        m_cv.wait(lock, [this]{ return !m_requestQueue.empty() || !m_runRequestDaemon; });
+
+        if (!m_runRequestDaemon) break;
+
+        LOG_TRACE("Streamer request queue size: {}", m_requestQueue.size());
+
+        // send all
+        while (!m_requestQueue.empty()) {
+            RequestData payload = m_requestQueue.front();
+            m_requestQueue.pop();
+            lock.unlock();
+
+            // we can do async send here, this essentially pushes the payload to the
+            // websocket's internal message queue. It will schedule the send automatically.
+            // No need to sync.
+            m_websocket->asyncSend(payload.request, payload.callback);
+
+            // lock again before checking the queue
+            lock.lock();
+        }
+    }
+}
+
+std::string Streamer::constructStreamRequest(
     RequestServiceType service,
     RequestCommandType command,
     const RequestParametersType& parameters)
@@ -213,18 +275,19 @@ std::string Streamer::streamRequest(
 std::string Streamer::requestServiceType2String(RequestServiceType type)
 {
     switch (type) {
-        case RequestServiceType::ADMIN: return "ADMIN";
+        case RequestServiceType::ADMIN:             return "ADMIN";
         case RequestServiceType::LEVELONE_EQUITIES: return "LEVELONE_EQUITIES";
-        case RequestServiceType::NYSE_BOOK: return "NYSE_BOOK";
+        case RequestServiceType::NYSE_BOOK:         return "NYSE_BOOK";
     }
 }
 
 std::string Streamer::requestCommandType2String(RequestCommandType type)
 {
     switch (type) {
-        case RequestCommandType::LOGIN: return "LOGIN";
+        case RequestCommandType::LOGIN:  return "LOGIN";
         case RequestCommandType::LOGOUT: return "LOGOUT";
-        case RequestCommandType::SUBS: return "SUBS";
+        case RequestCommandType::SUBS:   return "SUBS";
+        case RequestCommandType::ADD:    return "ADD";
     }
 }
 
