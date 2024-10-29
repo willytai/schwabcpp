@@ -1,17 +1,20 @@
 #include "streamer.h"
 #include "client.h"
-#include "utils/logger.h"
 #include "nlohmann/json.hpp"
+#include "../utils/logger.h"
 
 namespace l2viz {
 
 using json = nlohmann::json;
 
+auto __streamerDataHandlerPlaceholder = [](const std::string& data) {
+    LOG_INFO("Data: \n{}", data.empty() ? "" : json::parse(data).dump(4));
+};
+
 Streamer::Streamer(Client* client)
     : m_client(client)
     , m_requestId(0)
-    , m_isActive(false)
-    , m_runRequestDaemon(false)
+    , m_state(CVState::Inactive)
 {
     LOG_INFO("Initializing streamer.");
 
@@ -87,8 +90,11 @@ void Streamer::start()
     // connect and login
     m_websocket->asyncConnect(std::bind(&Streamer::onWebsocketConnected, this));
 
+    // set the run sender daemon flag
+    // don't need mutex here, sender not launched yet
+    m_state.setFlag(CVState::RunRequestDaemon, true);
+
     // launch the request daemon
-    m_runRequestDaemon = true;
     m_requestDaemon = std::thread(
         [this] { sendRequests(); }
     );
@@ -102,13 +108,23 @@ void Streamer::start()
             { "fields", "0,1,2,3,33"  },
         }
     );
-    std::string testSubRequest2 = constructStreamRequest(
-        RequestServiceType::LEVELONE_EQUITIES,
-        RequestCommandType::ADD,
-        {
-            { "keys", "NVDA" },
-            { "fields", "0,1,2,3,33"  },
-        }
+    std::string testSubRequest2 = batchStreamRequests(
+        constructStreamRequest(
+            RequestServiceType::LEVELONE_EQUITIES,
+            RequestCommandType::ADD,
+            {
+                { "keys", "NVDA" },
+                { "fields", "0,1,2,3,33"  },
+            }
+        ),
+        constructStreamRequest(
+            RequestServiceType::NYSE_BOOK,
+            RequestCommandType::ADD,
+            {
+                { "keys", "PLTR" },
+                { "fields", "0,1,2,3"  },
+            }
+        )
     );
     asyncRequest(testSubRequest1);
     asyncRequest(testSubRequest2);
@@ -164,19 +180,17 @@ void Streamer::onWebsocketConnected()
                             } else {
                                 LOG_INFO("Successfully logged in.");
 
-                                // notify the active status
+                                // notify the status
                                 {
-                                    std::lock_guard<std::mutex> lock(m_mutex_active);
-                                    m_isActive = true;
+                                    std::lock_guard<std::mutex> lock(m_mutex_state);
+                                    m_state.setState(CVState::Active);
                                     m_cv.notify_all();
                                 }
 
                                 // now that we're logged in, start the receiver loop
                                 m_websocket->startReceiverLoop(
                                     // TODO: this is where the stream data handler should go
-                                    [this](const std::string& data) {
-                                        LOG_INFO("Data: {}", data);
-                                    }
+                                    __streamerDataHandlerPlaceholder
                                 );
                             }
                         }
@@ -189,13 +203,16 @@ void Streamer::onWebsocketConnected()
 
 void Streamer::stop()
 {
+    // update the flags
+    {
+        std::lock_guard lock(m_mutex_state);
+        m_state.setState(CVState::Inactive);
+        m_state.setFlag(CVState::RunRequestDaemon, false);
+    }
+
     // stop the request daemon if it is running
-    if (m_requestDaemon.joinable() && m_runRequestDaemon) {
+    if (m_requestDaemon.joinable()) {
         LOG_TRACE("Stopping streamer request daemon.");
-        {
-            std::lock_guard<std::mutex> lock(m_mutex_runRequestDaemon);
-            m_runRequestDaemon = false;
-        }
         m_cv.notify_all();
     }
 
@@ -203,49 +220,107 @@ void Streamer::stop()
     m_websocket.reset();
 }
 
+void Streamer::pause()
+{
+    std::unique_lock lock(m_mutex_state);
+
+    // we can only pause if we are active
+    if (m_state.testState(CVState::Active)) {
+        LOG_DEBUG("Pausing streamer.");
+
+        // for pausing the request sender
+        // just change the state
+        // no need to notify since it is already running
+        m_state.setState(CVState::Paused);
+        lock.unlock();
+
+        // stop the websocket receiver loop
+        m_websocket->stopReceiverLoop();
+    } else {
+        LOG_DEBUG("Streamer not streaming, cannot pause.");
+    }
+}
+
+void Streamer::resume()
+{
+    std::unique_lock lock(m_mutex_state);
+
+    // we can only resume if we are paused
+    if (m_state.testState(CVState::Paused)) {
+        LOG_DEBUG("Resuming streamer.");
+        lock.unlock();
+
+        // start the receiver loop
+        m_websocket->startReceiverLoop(
+            // TODO: this is where the stream data handler should go
+            __streamerDataHandlerPlaceholder
+        );
+
+        // change state and notify sender
+        lock.lock();
+        m_state.setState(CVState::Active);
+        lock.unlock();
+
+        m_cv.notify_all();
+    } else {
+        LOG_DEBUG("Streamer not paused, cannot resume.");
+    }
+}
+
 void Streamer::asyncRequest(const std::string& request, std::function<void()> callback)
 {
     // enqueue the request
-    std::unique_lock<std::mutex> lock(m_mutex_requestQ);
-    m_requestQueue.emplace(std::move(request), callback);
-    lock.unlock();
+    {
+        std::lock_guard<std::mutex> lock(m_mutex_requestQ);
+        m_requestQueue.emplace(std::move(request), callback);
+    }
+    // set the flag
+    {
+        std::lock_guard lock(m_mutex_state);
+        m_state.setFlag(CVState::RequestQueueNotEmpty, true);
+    }
     // notify
     m_cv.notify_one();
 }
 
 void Streamer::sendRequests()
 {
-    while (m_runRequestDaemon) {
+    std::unique_lock<std::mutex> stateLock(m_mutex_state);
+    while (m_state.testFlag(CVState::RunRequestDaemon)) {
 
-        // wait until active (logged in)
-        {
-            std::unique_lock<std::mutex> lock(m_mutex_active);
-            m_cv.wait(lock, [this]{ return m_isActive || !m_runRequestDaemon; });
+        // now we will wati until the state flag is notified and post check should wake sender
+        m_cv.wait(stateLock, [this] { return m_state.shouldWakeSender(); });
 
-            if (!m_runRequestDaemon) break;
-        }
-
-        // wait until request pending
-        std::unique_lock<std::mutex> lock(m_mutex_requestQ);
-        m_cv.wait(lock, [this]{ return !m_requestQueue.empty() || !m_runRequestDaemon; });
-
-        if (!m_runRequestDaemon) break;
+        // if we woke up because the run flag is unset, break
+        if (!m_state.testFlag(CVState::RunRequestDaemon)) break;
 
         LOG_TRACE("Streamer request queue size: {}", m_requestQueue.size());
 
-        // send all
-        while (!m_requestQueue.empty()) {
+        // send all if not interrupted
+        std::unique_lock<std::mutex> queueLock(m_mutex_requestQ);
+        while (!m_requestQueue.empty() && m_state.testState(CVState::Active)) {
+            // done checking state, release
+            stateLock.unlock();
+
             RequestData payload = m_requestQueue.front();
             m_requestQueue.pop();
-            lock.unlock();
+
+            // dequeue complete, release
+            queueLock.unlock();
 
             // we can do async send here, this essentially pushes the payload to the
             // websocket's internal message queue. It will schedule the send automatically.
             // No need to sync.
             m_websocket->asyncSend(payload.request, payload.callback);
 
-            // lock again before checking the queue
-            lock.lock();
+            // lock again before checking the queue and state
+            queueLock.lock();
+            stateLock.lock();
+        }
+
+        // queue and state are locked at this point
+        if (m_requestQueue.empty()) {
+            m_state.setFlag(CVState::RequestQueueNotEmpty, false);
         }
     }
 }
@@ -272,12 +347,24 @@ std::string Streamer::constructStreamRequest(
     return std::move(requestJson.dump(-1));
 }
 
+std::string Streamer::batchStreamRequests(const std::vector<std::string>& requests)
+{
+    // This batches the reuqests into a list with the key "requests"
+    json requestJson;
+    std::vector<json> tmp(requests.size());
+    std::transform(requests.cbegin(), requests.cend(), tmp.begin(), [](const std::string& req){ return json::parse(req); });
+    requestJson["requests"] = tmp;
+
+    return std::move(requestJson.dump(-1));
+}
+
 std::string Streamer::requestServiceType2String(RequestServiceType type)
 {
     switch (type) {
         case RequestServiceType::ADMIN:             return "ADMIN";
         case RequestServiceType::LEVELONE_EQUITIES: return "LEVELONE_EQUITIES";
         case RequestServiceType::NYSE_BOOK:         return "NYSE_BOOK";
+        case RequestServiceType::NASDAQ_BOOK:       return "NASDAQ_BOOK";
     }
 }
 
@@ -289,6 +376,45 @@ std::string Streamer::requestCommandType2String(RequestCommandType type)
         case RequestCommandType::SUBS:   return "SUBS";
         case RequestCommandType::ADD:    return "ADD";
     }
+}
+
+// -- CVState
+Streamer::CVState::CVState(State state)
+    : _flag(0x0)
+    , _state(State::Inactive)
+{}
+
+void Streamer::CVState::setFlag(Flag flag, bool b)
+{
+    if (b) {
+        _flag |= flag;
+    } else {
+        _flag &= ~flag;
+    }
+}
+
+void Streamer::CVState::setState(State state)
+{
+    _state = state;
+}
+
+bool Streamer::CVState::testFlag(Flag flag) const
+{
+    return _flag & flag;
+}
+
+bool Streamer::CVState::testState(State state) const
+{
+    return _state == state;
+}
+
+bool Streamer::CVState::shouldWakeSender() const
+{
+    // when should we wake the sender?
+    // 1.active and messeage queue not empty
+    // 2. when the run sender flag is unset 
+    return testState(CVState::Active) && testFlag(CVState::RequestQueueNotEmpty)
+        || !testFlag(CVState::RunRequestDaemon);
 }
 
 }

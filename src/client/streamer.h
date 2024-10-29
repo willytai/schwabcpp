@@ -42,6 +42,7 @@ class Streamer
         ADMIN,
         LEVELONE_EQUITIES,
         NYSE_BOOK,
+        NASDAQ_BOOK,
     };
     static std::string requestServiceType2String(RequestServiceType type);
 
@@ -61,8 +62,16 @@ public:
 
 
     void                        start();
-    void                        asyncRequest(const std::string& request, std::function<void()> callback = {});
     void                        stop();
+
+    // does nothing if not running
+    void                        pause();
+
+    // does nothing if already running
+    void                        resume();
+
+
+    void                        asyncRequest(const std::string& request, std::function<void()> callback = {});
 
 private:
     std::string                 constructStreamRequest(
@@ -70,6 +79,19 @@ private:
                                     RequestCommandType command,
                                     const RequestParametersType& parameters = {}
                                 );
+
+    // convenience function
+    // usage:
+    //      std::string requests = batchStreamRequests(
+    //          constructStreamRequest(...),
+    //          constructStreamRequest(...),
+    //          .
+    //          .
+    //          .
+    //      )
+    template<typename... Args>
+    std::string                 batchStreamRequests(Args... args) { return std::move(batchStreamRequests({args...})); }
+    std::string                 batchStreamRequests(const std::vector<std::string>& requests);
 
 private:
     void                        onWebsocketConnected();
@@ -86,12 +108,38 @@ private:
                                 m_streamerInfo;
     size_t                      m_requestId;
 
-    // -- request queue control
-    bool                        m_isActive;
-    bool                        m_runRequestDaemon;
+    // -- request queue and sender control
+    class CVState {
+        typedef uint8_t Flag;
+    public:
+        // flag for running the request daemon
+        inline static const Flag RunRequestDaemon = 1 << 0;
+
+        // whether request queue is empty
+        inline static const Flag RequestQueueNotEmpty = 1 << 1;
+
+        // state
+        enum State {
+            Inactive = 1,   // before calling start()
+            Active   = 2,   // after start() succeed
+            Paused   = 3,   // when paused() called after start()
+        };
+
+        explicit CVState(State state);
+
+        void setFlag(Flag flag, bool b);
+        void setState(State state);
+        bool testFlag(Flag flag) const;
+        bool testState(State state) const;
+        bool shouldWakeSender() const;
+
+    private:
+        Flag        _flag;
+        uint8_t     _state;
+    };
+    CVState                     m_state;
     std::thread                 m_requestDaemon;
-    mutable std::mutex          m_mutex_active;
-    mutable std::mutex          m_mutex_runRequestDaemon;
+    mutable std::mutex          m_mutex_state;
     mutable std::mutex          m_mutex_requestQ;
     std::condition_variable     m_cv;  // for notifying the request daemon
     struct RequestData {

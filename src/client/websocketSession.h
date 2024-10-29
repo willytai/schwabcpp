@@ -50,6 +50,7 @@ public:
     void                                                asyncReceive(std::function<void(const std::string&)> callback);
 
     void                                                startReceiverLoop(std::function<void(const std::string&)> callback);
+    void                                                stopReceiverLoop();
 
     bool                                                isConnected() const;
 
@@ -102,24 +103,57 @@ private:
     std::string                                         m_path;
     beast::flat_buffer                                  m_buffer;
 
+    // -- handles
     tcp::resolver                                       m_resolver;
     websocket::stream<ssl::stream<beast::tcp_stream>>   m_websocketStream;
 
-    // -- message queue
+    // -- receiver loop
+    bool                                                m_receiverLoopRunning;
+
+    // -- message queue and sender control
+    class CVState {
+        typedef uint8_t Flag;
+    public:
+        // flag for running the sender daemon
+        inline static const Flag RunSenderDaemon = 1 << 0;
+
+        // flag for running the receiver loop
+        inline static const Flag RunReceiverLoop = 1 << 1;
+
+        // whether message queue is empty
+        inline static const Flag MessageQueueNotEmpty = 1 << 2;
+
+        enum State {
+            // connection info
+            Disconnected        = 1,
+            HostResolved        = 2,
+            Connected           = 3,
+            SSLHandshaked       = 4,
+            WebsocketHandshaked = 5,  // we need to reach to this state to start sending requests
+        };
+
+        explicit CVState(State state);
+
+        void setFlag(Flag flag, bool b);
+        void setState(State state);
+        bool testFlag(Flag flag) const;
+        bool testState(State state) const;
+        bool shouldWakeSender() const;
+
+    private:
+        Flag        _flag;
+        uint8_t     _state;
+    };
+    CVState                                             m_state;
+    std::thread                                         m_senderDaemon;
+    mutable std::mutex                                  m_mutex_state;        // mutex for connection flag
+    mutable std::mutex                                  m_mutex_messageQ;     // mutex for message queue
+    std::condition_variable                             m_cv;                 // for notifying the sender daemon
     struct MessageData {
         std::string request;
         std::function<void()> callback;
     };
     std::queue<MessageData>                             m_messageQueue;
-
-    // -- message queue control
-    bool                                                m_isConnected;
-    std::atomic<bool>                                   m_runSenderDaemon;
-    std::thread                                         m_senderDaemon;
-    mutable std::mutex                                  m_mutex_runSenderDaemon;  // mutex for connection flag
-    mutable std::mutex                                  m_mutex_connected;        // mutex for connection flag
-    mutable std::mutex                                  m_mutex_messageQ;         // mutex for message queue
-    std::condition_variable                             m_cv;                     // for notifying the sender daemon
 };
 
 }

@@ -23,6 +23,7 @@ public:
     void                                    asyncReceive(std::function<void(const std::string&)> callback);
 
     void                                    startReceiverLoop(std::function<void(const std::string&)> callback);
+    void                                    stopReceiverLoop();
 
     bool                                    isConnected() const { return m_session ? m_session->isConnected() : false; }
 

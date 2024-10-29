@@ -1,5 +1,5 @@
 #include "websocketSession.h"
-#include "utils/logger.h"
+#include "../utils/logger.h"
 #include <boost/beast/core.hpp>
 #include <boost/beast/ssl.hpp>
 #include <boost/asio/strand.hpp>
@@ -16,10 +16,10 @@ WebsocketSession::WebsocketSession(
     : m_host(host)
     , m_port(port)
     , m_path(path)
-    , m_isConnected(false)
+    , m_state(CVState::Disconnected)
     , m_resolver(net::make_strand(ioContext))
+    , m_receiverLoopRunning(false)
     , m_websocketStream(net::make_strand(ioContext), sslContext)
-    , m_runSenderDaemon(false)
 {
 }
 
@@ -35,9 +35,12 @@ WebsocketSession::~WebsocketSession()
 
 void WebsocketSession::asyncConnect(std::function<void()> onFinalHandshake)
 {
+    // set the run sender daemon flag
+    // don't need mutex here, sender not launched yet
+    m_state.setFlag(CVState::RunSenderDaemon, true);
+
     // launch the sender
     // it will wait unitl connection established to start doing things
-    m_runSenderDaemon = true;
     m_senderDaemon = std::thread(
         &WebsocketSession::sendMessages,
         shared_from_this()
@@ -62,6 +65,12 @@ void WebsocketSession::onResolve(
     if (ec) {
         LOG_ERROR("Resolve failed. Error: {}", ec.message());
     } else {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex_state);
+            // successfully resolved, update the state
+            m_state.setState(CVState::HostResolved);
+        }
+
         // Set a timeout on the operation
         beast::get_lowest_layer(m_websocketStream).expires_after(std::chrono::seconds(30));
 
@@ -95,6 +104,12 @@ void WebsocketSession::onConnect(
             LOG_ERROR("Connection failed. Error: {}", ec.message());
         }
 
+        {
+            std::lock_guard<std::mutex> lock(m_mutex_state);
+            // Successfully connected
+            m_state.setState(CVState::Connected);
+        }
+
         // Set a timeout on the operation
         beast::get_lowest_layer(m_websocketStream).expires_after(std::chrono::seconds(30));
 
@@ -117,6 +132,12 @@ void WebsocketSession::onSSLHandshake(
     if (ec) {
         LOG_ERROR("SSL handshake failed. Error: {}", ec.message());
     } else {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex_state);
+            // SSL handshake passed
+            m_state.setState(CVState::SSLHandshaked);
+        }
+
         // Turn off the timeout on the tcp_stream, because
         // the websocket stream has its own timeout system.
         beast::get_lowest_layer(m_websocketStream).expires_never();
@@ -164,11 +185,14 @@ void WebsocketSession::onWebsocketHandshake(
 
         // set the flag
         {
-            std::lock_guard<std::mutex> lock(m_mutex_connected);
-            m_isConnected = true;
+            std::lock_guard<std::mutex> lock(m_mutex_state);
+            // websocket handshake passed
+            m_state.setState(CVState::WebsocketHandshaked);
         }
+
         // notify the connection status
         m_cv.notify_all();
+
         // invoke the custom handler
         onFinalHandshake();
     }
@@ -176,22 +200,20 @@ void WebsocketSession::onWebsocketHandshake(
 
 void WebsocketSession::asyncDisconnect()
 {
-    // stop the sender daemon if it is running
-    if (m_senderDaemon.joinable() && m_runSenderDaemon) {
-        LOG_TRACE("Stopping websocket session sender daemon.");
-        {
-            std::lock_guard<std::mutex> lock(m_mutex_runSenderDaemon);
-            m_runSenderDaemon = false;
-        }
-        m_cv.notify_all();
+    // update the flag to Disconnected
+    // unset RunSenderDaemon and RunReceiverLoop
+    // notify if sender daemon is running
+    {
+        std::lock_guard<std::mutex> lock(m_mutex_state);
+        m_state.setState(CVState::Disconnected);
+        m_state.setFlag(CVState::RunReceiverLoop, false);
+        m_state.setFlag(CVState::RunSenderDaemon, false);
     }
 
-    // set the m_isConnected flag
-    // can't do it in the onClose handler
-    // need to make sure the loop is stopped BEFORE close
-    {
-        std::lock_guard<std::mutex> lock(m_mutex_connected);
-        m_isConnected = false;
+    // stop the sender daemon if it is running
+    if (m_senderDaemon.joinable()) {
+        LOG_TRACE("Stopping websocket session sender daemon.");
+        m_cv.notify_all();
     }
 
     // NOTE: Explicitly closing always results in stream truncated error for some unknown reason...
@@ -221,10 +243,17 @@ void WebsocketSession::onClose(beast::error_code ec)
 
 void WebsocketSession::asyncSend(const std::string& request, std::function<void()> callback)
 {
-    // put things in the message queue and notify the sender
-    std::unique_lock lock(m_mutex_messageQ);
-    m_messageQueue.emplace(std::move(request), callback);
-    lock.unlock();
+    // put things in the message queue
+    {
+        std::lock_guard lock(m_mutex_messageQ);
+        m_messageQueue.emplace(std::move(request), callback);
+    }
+    // set the flag
+    {
+        std::lock_guard lock(m_mutex_state);
+        m_state.setFlag(CVState::MessageQueueNotEmpty, true);
+    }
+    // notify sender
     m_cv.notify_one();
 }
 
@@ -273,34 +302,14 @@ void WebsocketSession::startReceiverLoop(std::function<void(const std::string&)>
 {
     LOG_INFO("Websocket session starting receiver loop.");
 
-    m_websocketStream.async_read(
-        m_buffer,
-        beast::bind_front_handler(
-            &WebsocketSession::onReceiveLoop,
-            shared_from_this(),
-            callback
-        )
-    );
-}
-
-void WebsocketSession::onReceiveLoop(
-    std::function<void(const std::string&)> callback,
-    beast::error_code ec,
-    std::size_t bytesTransferred)
-{
-    if (ec) {
-        LOG_ERROR("Websocket loop receive failed. Error: {}", ec.message());
-    } else {
-        // only trigger the callback when disconnect is not pending
-        if (callback && m_isConnected) {
-            callback(beast::buffers_to_string(m_buffer.data()));
-        }
+    // set the flag
+    {
+        std::lock_guard<std::mutex> lock(m_mutex_state);
+        m_state.setFlag(CVState::RunReceiverLoop, true);
     }
 
-    m_buffer.clear();
-
-    // queue next receive if connected
-    if (m_isConnected) {
+    if (!m_receiverLoopRunning) {
+        m_receiverLoopRunning = true;
         m_websocketStream.async_read(
             m_buffer,
             beast::bind_front_handler(
@@ -310,53 +319,171 @@ void WebsocketSession::onReceiveLoop(
             )
         );
     } else {
-        LOG_TRACE("Disconnecting, stopping websocket session receive loop.");
+        LOG_TRACE("Websocket session receiver loop already running.");
+    }
+}
+
+void WebsocketSession::stopReceiverLoop()
+{
+    std::lock_guard<std::mutex> lock(m_mutex_state);
+
+    // no point stopping if loop not running
+    if (m_state.testFlag(CVState::RunReceiverLoop)) {
+        LOG_INFO("Websocket session stopping receiver loop.");
+
+        // this stops the receiver loop but DOESN'T
+        // stop the message sender
+        // only asyncDisconnect does
+        m_state.setFlag(CVState::RunReceiverLoop, false);
+    } else {
+        LOG_WARN("Receiver loop not running.");
+    }
+}
+
+void WebsocketSession::onReceiveLoop(
+    std::function<void(const std::string&)> callback,
+    beast::error_code ec,
+    std::size_t bytesTransferred)
+{
+    if (ec) {
+        // update the flag
+        {
+            std::lock_guard lock(m_mutex_state);
+            m_state.setFlag(CVState::RunReceiverLoop, false);
+        }
+        // receive loop will exit for now if an error is caught
+        // TODO: reconnect when this happens
+        LOG_ERROR("Websocket loop receive failed. Receiver loop stopped.");
+        LOG_ERROR("Error code: {}", ec.value());
+        LOG_ERROR("Error what: {}", ec.what());
+        LOG_ERROR("Error message: {}", ec.message());
+        LOG_ERROR("Error category.name: {}", ec.category().name());
+        LOG_ERROR("Error to_string: {}", ec.to_string());
+        LOG_ERROR("Error location.to_string: {}", ec.location().to_string());
+    } else {
+        // proceed if we are in the right state with the right flag
+        std::unique_lock<std::mutex> lock(m_mutex_state);
+        if (!m_state.testState(CVState::WebsocketHandshaked)) {
+            lock.unlock();
+
+            LOG_TRACE("Websocket not connected, stopping websocket session receiver loop.");
+            m_buffer.clear();
+        } else if (m_state.testFlag(CVState::RunReceiverLoop)) {
+            lock.unlock();
+
+            if (callback) {
+                callback(beast::buffers_to_string(m_buffer.data()));
+            }
+            m_buffer.clear();
+
+            // queue the next read
+            m_websocketStream.async_read(
+                m_buffer,
+                beast::bind_front_handler(
+                    &WebsocketSession::onReceiveLoop,
+                    shared_from_this(),
+                    callback
+                )
+            );
+        } else {
+            lock.unlock();
+            m_receiverLoopRunning = false;
+
+            LOG_TRACE("Websocket session receiver loop run flag unset. Stopping loop.");
+        }
     }
 }
 
 bool WebsocketSession::isConnected() const
 {
-    std::lock_guard<std::mutex> lock(m_mutex_connected);
-    return m_isConnected;
+    std::lock_guard<std::mutex> lock(m_mutex_state);
+    return m_state.testState(CVState::WebsocketHandshaked);
 }
 
 // -- sender daemon
 void WebsocketSession::sendMessages()
 {
-    while (m_runSenderDaemon) {
+    std::unique_lock<std::mutex> stateLock(m_mutex_state);
+    while (m_state.testFlag(CVState::RunSenderDaemon)) {
 
-        // wait until connected
-        {
-            std::unique_lock<std::mutex> lock(m_mutex_connected);
-            m_cv.wait(lock, [self = shared_from_this()]{ return self->m_isConnected || !self->m_runSenderDaemon; });
+        // now we will wati until the state flag is notified and post check should wake sender
+        m_cv.wait(stateLock, [self = shared_from_this()] { return self->m_state.shouldWakeSender(); });
 
-            if (!m_runSenderDaemon) break;
-        }
-
-        // wait until messages pending
-        std::unique_lock<std::mutex> lock(m_mutex_messageQ);
-        m_cv.wait(lock, [self = shared_from_this()]{ return !self->m_messageQueue.empty() || !self->m_runSenderDaemon; });
-
-        if (!m_runSenderDaemon) break;
+        // if we woke up because the run flag is unset, break
+        if (!m_state.testFlag(CVState::RunSenderDaemon)) break;
 
         LOG_TRACE("Websocket session message queue size: {}", m_messageQueue.size());
 
-        while (!m_messageQueue.empty()) {
+        // send all while connected
+        std::unique_lock<std::mutex> queueLock(m_mutex_messageQ);
+        while (!m_messageQueue.empty() && m_state.testState(CVState::WebsocketHandshaked)) {
+            // done checking state, release
+            stateLock.unlock();
+
             MessageData payload = m_messageQueue.front();
             m_messageQueue.pop();
-            lock.unlock();  // release the lock here
+
+            // dequeue complete, release
+            queueLock.unlock();
 
             // consecutive writes has to be blocking
+            // TODO:
+            // add error handling here, this is not guaranteed to succeed
             m_websocketStream.write(net::buffer(payload.request));
             // run the callback
             if (payload.callback) {
                 payload.callback();
             }
 
-            // lock before checking the queue
-            lock.lock();
+            // lock before checking the queue and state
+            queueLock.lock();
+            stateLock.lock();
+        }
+
+        // queue and state are locked at this point
+        if (m_messageQueue.empty()) {
+            m_state.setFlag(CVState::MessageQueueNotEmpty, false);
         }
     }
+}
+
+// -- CVState
+WebsocketSession::CVState::CVState(State state)
+    : _flag(0x0)
+    , _state(state)
+{}
+
+void WebsocketSession::CVState::setFlag(Flag flag, bool b)
+{
+    if (b) {
+        _flag |= flag;
+    } else {
+        _flag &= ~flag;
+    }
+}
+
+void WebsocketSession::CVState::setState(State state)
+{
+    _state = state;
+}
+
+bool WebsocketSession::CVState::testFlag(Flag flag) const
+{
+    return _flag & flag;
+}
+
+bool WebsocketSession::CVState::testState(State state) const
+{
+    return _state == state;
+}
+
+bool WebsocketSession::CVState::shouldWakeSender() const
+{
+    // when should we wake the sender?
+    // 1. websocket handshake successful and messeage queue not empty
+    // 2. when the run sender flag is unset 
+    return testState(CVState::WebsocketHandshaked) && testFlag(CVState::MessageQueueNotEmpty)
+        || !testFlag(CVState::RunSenderDaemon);
 }
 
 }

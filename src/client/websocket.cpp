@@ -1,5 +1,5 @@
 #include "websocket.h"
-#include "utils/logger.h"
+#include "../utils/logger.h"
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
 #include <boost/beast/ssl.hpp>
@@ -81,6 +81,11 @@ void Websocket::asyncReceive(std::function<void(const std::string&)> callback)
 void Websocket::startReceiverLoop(std::function<void(const std::string&)> callback)
 {
     m_session->startReceiverLoop(callback);
+}
+
+void Websocket::stopReceiverLoop()
+{
+    m_session->stopReceiverLoop();
 }
 
 }

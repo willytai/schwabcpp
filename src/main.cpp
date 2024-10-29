@@ -1,29 +1,24 @@
-#include "client.h"
+#include "app.h"
 #include "utils/logger.h"
 
 // NOTE: <leader>uf toggles buffer auto foramtting
 
-int main(int argc, char *argv[]) {
+int main(int argc, char** argv) {
 
+    // initailize the logger at startup
     spdlog::level::level_enum logLevel(spdlog::level::debug);
 
     if (argc > 1 && !strcmp(argv[1], "trace")) {
         logLevel = spdlog::level::trace;
     }
 
-    // initailize the logger at startup
     l2viz::Logger::init(logLevel);
 
-    l2viz::Client client;
+    // start the app
+    l2viz::Level2Visualizer app;
+    app.run();
 
-    client.startStreamer();
-
-    std::this_thread::sleep_for(std::chrono::seconds(10));
-    // std::this_thread::sleep_for(std::chrono::minutes(1));
-
-    client.stopStreamer();
-
-    LOG_TRACE("Terminating program now...");
+    LOG_INFO("Program exited normally.");
 
     return 0;
 }

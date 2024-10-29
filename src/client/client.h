@@ -23,16 +23,25 @@ public:
     void                        startStreamer();
     void                        stopStreamer();
 
+    void                        pauseStreamer();
+    void                        resumeStreamer();
+
 private:
     void                        loadCredentials(const std::filesystem::path& appCredentialPath);
     void                        init();
 
     // --- OAuth Flow ---
+    enum class TokenStatus : char {
+        UpdateNotRequired,
+        UpdateSucceeded,
+        UpdateFailed,
+        NoTokens,
+    };
     bool                        loadTokens();
     std::string                 getAuthorizationCode();
     void                        getTokens(const std::string& grantType, const std::string& code, std::string& responseData);
-    void                        updateTokens();
-    void                        writeTokens(const clock::time_point& accessTokenTS, const clock::time_point& refreshTokenTS, const std::string& responseData);
+    bool                        writeTokens(const clock::time_point& accessTokenTS, const clock::time_point& refreshTokenTS, const std::string& responseData);
+    TokenStatus                 updateTokens();
 
     // --- Token Checker Daemon's Job ---
     void                        checkTokens();

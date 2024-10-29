@@ -1,8 +1,8 @@
 #include "client.h"
 #include "streamer.h"
 #include "base64.hpp"
-#include "utils/logger.h"
 #include "nlohmann/json.hpp"
+#include "../utils/logger.h"
 
 #include <curl/curl.h>
 #include <iostream>
@@ -68,6 +68,16 @@ void Client::stopStreamer()
     m_streamer->stop();
 }
 
+void Client::pauseStreamer()
+{
+    m_streamer->pause();
+}
+
+void Client::resumeStreamer()
+{
+    m_streamer->resume();
+}
+
 void Client::loadCredentials(const std::filesystem::path& appCredentialPath)
 {
     std::ifstream file(appCredentialPath);
@@ -93,6 +103,8 @@ void Client::init()
 {
     LOG_INFO("Initializing client.");
 
+    TokenStatus tokenStatus = TokenStatus::NoTokens;
+
     // try to get the tokens from the cache
     if (!loadTokens()) {
         // run the full OAuth flow
@@ -103,12 +115,19 @@ void Client::init()
 
         // write the tokens
         clock::time_point now = clock::now();
-        writeTokens(now, now, responseData);
+        if (writeTokens(now, now, responseData)) {
+            tokenStatus = TokenStatus::UpdateSucceeded;
+        }
 
     } else {
         // check if update required and update if needed
-        updateTokens();
+        tokenStatus = updateTokens();
     }
+
+    // NOTE:
+    // Exiting if unable to get the tokens for the first try for now
+    if (tokenStatus != TokenStatus::UpdateSucceeded &&
+        tokenStatus != TokenStatus::UpdateNotRequired) exit(1);
 
     // start the token checker daemon
     LOG_INFO("Launching token checker daemon.");
@@ -168,8 +187,14 @@ bool Client::loadTokens()
     return result;
 }
 
-void Client::updateTokens()
+Client::TokenStatus Client::updateTokens()
 {
+    // NOTE:
+    // This automatically pauses the streamer while updating the tokens
+    // and resumes it after a successful update if the streamer is active.
+
+    TokenStatus status = TokenStatus::UpdateNotRequired;
+
     // 30 min according to schwab
     const clock::duration __access_token_timeout(std::chrono::minutes(30));
 
@@ -184,17 +209,36 @@ void Client::updateTokens()
     if (accessTokenValidTime < __access_token_update_threshold) {
         LOG_INFO("Access token expired, updating automatically.");
 
+        // pause streamer
+        if (m_streamer) {
+            m_streamer->pause();
+        }
+
         // request access token with the refresh token
         std::string responseData;
         getTokens("refresh_token", m_refreshToken, responseData);
 
+        // save the tokens
         clock::time_point now = clock::now();
-        writeTokens(now, m_refreshTokenTS, responseData);
+        if (!writeTokens(now, m_refreshTokenTS, responseData)) {
+            status = TokenStatus::UpdateFailed;
+        } else {
+            status = TokenStatus::UpdateSucceeded;
+
+            // resume streamer
+            if (m_streamer) {
+                m_streamer->resume();
+            }
+        }
     }
+
+    return status;
 }
 
-void Client::writeTokens(const clock::time_point& accessTokenTS, const clock::time_point& refreshTokenTS, const std::string& responseData)
+bool Client::writeTokens(const clock::time_point& accessTokenTS, const clock::time_point& refreshTokenTS, const std::string& responseData)
 {
+    bool result = false;
+
     if (!responseData.empty()) {
         // plug in the time stamp
         json jsonData = json::parse(responseData);
@@ -211,6 +255,9 @@ void Client::writeTokens(const clock::time_point& accessTokenTS, const clock::ti
             m_refreshTokenTS = refreshTokenTS;
         }
 
+        // tokens written
+        result = true;
+
         // cache the tokens
         std::ofstream tokenCache(tokenCacheFile, std::ofstream::trunc);
         if (tokenCache.is_open()) {
@@ -223,6 +270,8 @@ void Client::writeTokens(const clock::time_point& accessTokenTS, const clock::ti
     } else {
         LOG_ERROR("Token data empty.");
     }
+
+    return result;
 }
 
 void Client::getTokens(const std::string& grantType, const std::string& code, std::string& responseData)
@@ -308,7 +357,7 @@ void Client::checkTokens()
 {
     // check if update required every 30 seconds
     while (!m_stopCheckerDaemon) {
-        updateTokens();
+        TokenStatus tokenStatus = updateTokens();
         std::this_thread::sleep_for(std::chrono::seconds(30));
     }
 
