@@ -4,7 +4,7 @@
 #include "spdlog/spdlog.h"
 #include <memory>
 
-namespace l2viz {
+namespace schwabcpp {
 
 class Logger
 {
@@ -23,12 +23,12 @@ private:
 
 }
 
-#define LOG_TRACE(...) ::l2viz::Logger::getLogger()->trace(__VA_ARGS__)
-#define LOG_DEBUG(...) ::l2viz::Logger::getLogger()->debug(__VA_ARGS__)
-#define LOG_WARN(...)  ::l2viz::Logger::getLogger()->warn(__VA_ARGS__)
-#define LOG_INFO(...)  ::l2viz::Logger::getLogger()->info(__VA_ARGS__)
-#define LOG_ERROR(...) ::l2viz::Logger::getLogger()->error(__VA_ARGS__)
-#define LOG_FATAL(...) ::l2viz::Logger::getLogger()->critical(__VA_ARGS__); exit(1);
+#define LOG_TRACE(...) ::schwabcpp::Logger::getLogger()->trace(__VA_ARGS__)
+#define LOG_DEBUG(...) ::schwabcpp::Logger::getLogger()->debug(__VA_ARGS__)
+#define LOG_WARN(...)  ::schwabcpp::Logger::getLogger()->warn(__VA_ARGS__)
+#define LOG_INFO(...)  ::schwabcpp::Logger::getLogger()->info(__VA_ARGS__)
+#define LOG_ERROR(...) ::schwabcpp::Logger::getLogger()->error(__VA_ARGS__)
+#define LOG_FATAL(...) ::schwabcpp::Logger::getLogger()->critical(__VA_ARGS__); exit(1);
 
 #define VERIFY(condition, ...) \
     if (!condition) { \

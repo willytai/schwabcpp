@@ -1,6 +1,6 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.21)
 
-project(l2viz)
+project(schwabcpp)
 
 set(DISABLE_IN_SOURCE_BUILD ON)
 set(CMAKE_CXX_STANDARD 20)
@@ -15,11 +15,6 @@ add_subdirectory(external/nlohmann_json)
 # spdlog
 add_subdirectory(external/spdlog)
 
-# enable objc++
-set(CMAKE_C_COMPILER clang)
-set(CMAKE_CXX_COMPILER clang++)
-# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ObjC++ -fobjc-weak -fobjc-arc")
-
 # CURL
 find_package(CURL REQUIRED)
 
@@ -29,27 +24,20 @@ find_package(Boost REQUIRED)
 # OpenSSL
 find_package(OpenSSL REQUIRED)
 
-# glfw
-find_package(glfw3 3.3 REQUIRED)
-
 include_directories(
+    src
     external/base64/include
     external/spdlog/include
-    external/imgui/backends
-    external/imgui
-    external/metal-cpp
     ${Boost_INCLUDE_DIR}
     ${OPENSSL_INCLUDE_DIR}
 )
 
-file(GLOB_RECURSE SOURCES_CPP   src/*.cpp)
-file(GLOB_RECURSE SOURCES_CMM   src/*.mm)
+file(GLOB_RECURSE SOURCES src/*.cpp)
+list(FILTER SOURCES EXCLUDE REGEX "src/main/main.cpp$")
 
-set_source_files_properties(${SOURCES_CMM} PROPERTIES COMPILE_FLAGS "-ObjC++ -fobjc-weak")
+add_library(schwabcpp SHARED ${SOURCES})
 
-add_executable(l2viz ${SOURCES_CPP} ${SOURCES_CMM})
-
-target_link_libraries(l2viz PRIVATE
+target_link_libraries(schwabcpp PRIVATE
     CURL::libcurl
     nlohmann_json::nlohmann_json
     pthread
@@ -57,11 +45,11 @@ target_link_libraries(l2viz PRIVATE
     OpenSSL::SSL
     OpenSSL::Crypto
     spdlog::spdlog
-    glfw
-    "-framework Metal"
-    "-framework MetalKit"
-    "-framework Cocoa"
-    "-framework IOKit"
-    "-framework CoreVideo"
-    "-framework QuartzCore"
 )
+
+# build the test executable if we are top level
+if (schwabcpp_IS_TOP_LEVEL)
+    message("Test for schwabcpp turned on.")
+    add_executable(test src/main/main.cpp)
+    target_link_libraries(test PRIVATE schwabcpp)
+endif()

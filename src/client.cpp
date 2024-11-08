@@ -2,7 +2,7 @@
 #include "streamer.h"
 #include "base64.hpp"
 #include "nlohmann/json.hpp"
-#include "../utils/logger.h"
+#include "utils/logger.h"
 
 #include <curl/curl.h>
 #include <iostream>
@@ -11,7 +11,7 @@
 #include <filesystem>
 #include <thread>
 
-namespace l2viz {
+namespace schwabcpp {
 
 using json = nlohmann::json;
 
@@ -435,4 +435,4 @@ bool Client::requestUserPreferences(std::string& responseData) const
     return result;
 }
 
-} // namespace l2viz
+} // namespace schwabcpp

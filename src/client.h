@@ -8,7 +8,7 @@
 #include <memory>
 #include <filesystem>
 
-namespace l2viz {
+namespace schwabcpp {
 
 using clock = std::chrono::system_clock;
 
@@ -78,6 +78,6 @@ private:
     std::unique_ptr<Streamer>   m_streamer;
 };
 
-} // namespace l2viz
+} // namespace schwabcpp
 
 #endif // __CLIENT_H__

@@ -1,5 +1,5 @@
 #include "websocket.h"
-#include "../utils/logger.h"
+#include "utils/logger.h"
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
 #include <boost/beast/ssl.hpp>
@@ -7,7 +7,7 @@
 static std::string __port = "443";
 static std::string __path = "/ws";
 
-namespace l2viz {
+namespace schwabcpp {
 
 Websocket::Websocket(const std::string& url)
     : m_sslContext(boost::asio::ssl::context::sslv23)

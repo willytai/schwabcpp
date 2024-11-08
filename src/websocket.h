@@ -4,7 +4,7 @@
 #include "websocketSession.h"
 #include <thread>
 
-namespace l2viz {
+namespace schwabcpp {
 
 namespace beast = boost::beast;
 

@@ -1,10 +1,10 @@
 #include "websocketSession.h"
-#include "../utils/logger.h"
+#include "utils/logger.h"
 #include <boost/beast/core.hpp>
 #include <boost/beast/ssl.hpp>
 #include <boost/asio/strand.hpp>
 
-namespace l2viz {
+namespace schwabcpp {
 
 WebsocketSession::WebsocketSession(
     net::io_context& ioContext,

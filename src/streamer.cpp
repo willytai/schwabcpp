@@ -1,14 +1,18 @@
 #include "streamer.h"
 #include "client.h"
 #include "nlohmann/json.hpp"
-#include "../utils/logger.h"
+#include "utils/logger.h"
 
-namespace l2viz {
+namespace schwabcpp {
 
 using json = nlohmann::json;
 
 auto __streamerDataHandlerPlaceholder = [](const std::string& data) {
-    LOG_INFO("Data: \n{}", data.empty() ? "" : json::parse(data).dump(4));
+    try {
+        LOG_INFO("Data: \n{}", data.empty() ? "" : json::parse(data).dump(4));
+    } catch (...) {
+        LOG_WARN("Data: corrupted.");
+    }
 };
 
 Streamer::Streamer(Client* client)
@@ -116,21 +120,29 @@ void Streamer::start()
     );
     std::string testSubRequest2 = batchStreamRequests(
         constructStreamRequest(
-            RequestServiceType::NASDAQ_BOOK,
-            RequestCommandType::ADD,
+            RequestServiceType::LEVELONE_EQUITIES,
+            RequestCommandType::SUBS,
             {
-                { "keys", "NVDA" },
-                { "fields", "0,1,2,3" },
-            }
-        ),
-        constructStreamRequest(
-            RequestServiceType::NYSE_BOOK,
-            RequestCommandType::ADD,
-            {
-                { "keys", "PLTR" },
-                { "fields", "0,1,2,3" },
+                { "keys", "SPY" },
+                { "fields", "0,1,2,3,33"  },
             }
         )
+        // constructStreamRequest(
+        //     RequestServiceType::NASDAQ_BOOK,
+        //     RequestCommandType::ADD,
+        //     {
+        //         { "keys", "NVDA" },
+        //         { "fields", "0,1,2,3" },
+        //     }
+        // ),
+        // constructStreamRequest(
+        //     RequestServiceType::NYSE_BOOK,
+        //     RequestCommandType::ADD,
+        //     {
+        //         { "keys", "PLTR" },
+        //         { "fields", "0,1,2,3" },
+        //     }
+        // )
     );
     // asyncRequest(testSubRequest1);
     asyncRequest(testSubRequest2);

@@ -7,9 +7,3 @@
 [submodule "external/base64"]
 	path = external/base64
 	url = https://github.com/tobiaslocker/base64.git
-[submodule "external/imgui"]
-	path = external/imgui
-	url = https://github.com/ocornut/imgui.git
-[submodule "external/metal-cpp"]
-	path = external/metal-cpp
-	url = https://github.com/bkaradzic/metal-cpp.git

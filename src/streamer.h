@@ -4,7 +4,7 @@
 #include <unordered_map>
 #include "websocket.h"
 
-namespace l2viz {
+namespace schwabcpp {
 
 class Client;
 
