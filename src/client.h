@@ -17,7 +17,15 @@ class Streamer;
 class Client
 {
 public:
-                                Client(const std::filesystem::path& appCredentialPath = "./.appCredentials.json");
+    enum class LogLevel : char {
+        Debug,
+        Trace
+    };
+
+                                Client();
+                                Client(LogLevel level);
+                                Client(const std::filesystem::path& appCredentialPath);
+                                Client(const std::filesystem::path& appCredentialPath, LogLevel level);
                                 ~Client();
 
     void                        startStreamer();
@@ -28,7 +36,7 @@ public:
 
 private:
     void                        loadCredentials(const std::filesystem::path& appCredentialPath);
-    void                        init();
+    void                        init(const std::filesystem::path& appCredentialPath, LogLevel level);
 
     // --- OAuth Flow ---
     enum class TokenStatus : char {

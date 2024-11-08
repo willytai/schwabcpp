@@ -1,21 +1,17 @@
 #include "client.h"
-#include "utils/logger.h"
+#include <iostream>
 
 // NOTE: <leader>uf toggles buffer auto foramtting
 
 int main(int argc, char** argv) {
 
-    // initailize the logger at startup
-    spdlog::level::level_enum logLevel(spdlog::level::debug);
-
+    schwabcpp::Client::LogLevel logLevel(schwabcpp::Client::LogLevel::Debug);
     if (argc > 1 && !strcmp(argv[1], "trace")) {
-        logLevel = spdlog::level::trace;
+        logLevel = schwabcpp::Client::LogLevel::Trace;
     }
 
-    schwabcpp::Logger::init(logLevel);
-
     {
-        schwabcpp::Client client;
+        schwabcpp::Client client(logLevel);
         client.startStreamer();
 
         std::this_thread::sleep_for(std::chrono::seconds(10));
@@ -33,7 +29,7 @@ int main(int argc, char** argv) {
         client.stopStreamer();
     }
 
-    LOG_INFO("Program exited normally.");
+    std::cout << "Program exited normally" << std::endl;
 
     return 0;
 }

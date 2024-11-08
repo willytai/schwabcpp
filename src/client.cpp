@@ -25,17 +25,38 @@ size_t writeCallback(void* contents, size_t size, size_t nmemb, std::string* buf
 
 static std::string tokenCacheFile = ".tokens.json";
 
+static spdlog::level::level_enum to_spdlog_log_level(Client::LogLevel level)
+{
+    switch(level) {
+        case Client::LogLevel::Debug: return spdlog::level::debug;
+        case Client::LogLevel::Trace: return spdlog::level::trace;
+    }
+}
+
+}
+
+Client::Client()
+    : m_stopCheckerDaemon(false)
+{
+    init("./.appCredentials.json", LogLevel::Debug);
+}
+
+Client::Client(LogLevel level)
+    : m_stopCheckerDaemon(false)
+{
+    init("./.appCredentials.json", level);
 }
 
 Client::Client(const std::filesystem::path& appCredentialPath)
     : m_stopCheckerDaemon(false)
 {
-    // we are going to to a bunch of curl, init it here
-    curl_global_init(CURL_GLOBAL_DEFAULT);
+    init(appCredentialPath, LogLevel::Debug);
+}
 
-    loadCredentials(appCredentialPath);
-
-    init();
+Client::Client(const std::filesystem::path& appCredentialPath, LogLevel level)
+    : m_stopCheckerDaemon(false)
+{
+    init(appCredentialPath, level);
 }
 
 Client::~Client()
@@ -103,9 +124,16 @@ void Client::loadCredentials(const std::filesystem::path& appCredentialPath)
 
 // -- OAuth Flow
 
-void Client::init()
+void Client::init(const std::filesystem::path& appCredentialPath, LogLevel level)
 {
+    Logger::init(to_spdlog_log_level(level));
+
     LOG_INFO("Initializing client.");
+
+    // we are going to to a bunch of curl, init it here
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+
+    loadCredentials(appCredentialPath);
 
     TokenStatus tokenStatus = TokenStatus::NoTokens;
 
