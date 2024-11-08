@@ -47,7 +47,11 @@ Client::~Client()
 
     // stop the token checker daemon
     LOG_TRACE("Shutting down token checker daemon...");
-    m_stopCheckerDaemon = true;
+    {
+        std::lock_guard lock(m_tokenCheckerMutex);
+        m_stopCheckerDaemon = true;
+    }
+    m_tokenCheckerCV.notify_all();
 
     // curl cleanup
     curl_global_cleanup();
@@ -195,14 +199,24 @@ Client::TokenStatus Client::updateTokens()
 
     TokenStatus status = TokenStatus::UpdateNotRequired;
 
-    // 30 min according to schwab
-    const clock::duration __access_token_timeout(std::chrono::minutes(30));
-
     // 7 days according to schwab
     const clock::duration __refresh_token_timeout(std::chrono::hours(7 * 24));
 
+    // 30 min according to schwab
+    const clock::duration __access_token_timeout(std::chrono::minutes(30));
+
+    // 1 hour buffer time for refresh token update
+    const clock::duration __refresh_token_update_threshold(std::chrono::hours(1));
+
     // 1 minute buffer time for access token update
     const clock::duration __access_token_update_threshold(std::chrono::minutes(1));
+
+    // check if we need to re-authorize
+    clock::duration refreshTokenValidTime = (__refresh_token_timeout - (clock::now() - m_refreshTokenTS));
+    if (refreshTokenValidTime < __refresh_token_update_threshold) {
+        LOG_WARN("Refresh token expired, please re-authorize.");
+        return TokenStatus::UpdateFailed;
+    }
 
     // check if we need to update access token
     clock::duration accessTokenValidTime = (__access_token_timeout - (clock::now() - m_accessTokenTS));
@@ -356,9 +370,16 @@ std::string Client::getAuthorizationCode()
 void Client::checkTokens()
 {
     // check if update required every 30 seconds
+    std::unique_lock lock(m_tokenCheckerMutex);
     while (!m_stopCheckerDaemon) {
+        lock.unlock();
+
         TokenStatus tokenStatus = updateTokens();
-        std::this_thread::sleep_for(std::chrono::seconds(30));
+
+        lock.lock();
+        if (m_tokenCheckerCV.wait_for(lock, std::chrono::seconds(30), [this] { return m_stopCheckerDaemon; })) {
+            break;
+        }
     }
 
     LOG_TRACE("Token checker daemon stopped.");

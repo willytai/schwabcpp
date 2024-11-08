@@ -14,9 +14,11 @@ int main(int argc, char** argv) {
 
     l2viz::Logger::init(logLevel);
 
-    // start the app
-    l2viz::Level2Visualizer app;
-    app.run();
+    {
+        // start the app
+        l2viz::Level2Visualizer app;
+        app.run();
+    }
 
     LOG_INFO("Program exited normally.");
 

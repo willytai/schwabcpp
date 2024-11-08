@@ -121,10 +121,10 @@ void Level2Visualizer::startClientThread() {
 
             // TEST: testing pause resume
             {
-                std::this_thread::sleep_for(std::chrono::seconds(5));
-                client.pauseStreamer();
-                std::this_thread::sleep_for(std::chrono::seconds(5));
-                client.resumeStreamer();
+                // std::this_thread::sleep_for(std::chrono::seconds(5));
+                // client.pauseStreamer();
+                // std::this_thread::sleep_for(std::chrono::seconds(5));
+                // client.resumeStreamer();
             }
 
             // wait for the exit signal

@@ -70,7 +70,9 @@ private:
 
     // --- token checker daemon ---
     std::thread                 m_tokenCheckerDaemon;
-    std::atomic<bool>           m_stopCheckerDaemon;
+    bool                        m_stopCheckerDaemon;
+    mutable std::mutex          m_tokenCheckerMutex;
+    std::condition_variable     m_tokenCheckerCV;
 
     // --- streamer ---
     std::unique_ptr<Streamer>   m_streamer;

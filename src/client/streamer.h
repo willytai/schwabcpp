@@ -43,6 +43,7 @@ class Streamer
         LEVELONE_EQUITIES,
         NYSE_BOOK,
         NASDAQ_BOOK,
+        OPTIONS_BOOK,
     };
     static std::string requestServiceType2String(RequestServiceType type);
 

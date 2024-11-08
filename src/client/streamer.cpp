@@ -101,20 +101,26 @@ void Streamer::start()
 
     // TEST: test subscription
     std::string testSubRequest1 = constructStreamRequest(
-        RequestServiceType::LEVELONE_EQUITIES,
-        RequestCommandType::SUBS,
-        {
-            { "keys", "SPY" },
-            { "fields", "0,1,2,3,33"  },
-        }
+        // RequestServiceType::LEVELONE_EQUITIES,
+        // RequestCommandType::SUBS,
+        // {
+        //     { "keys", "SPY" },
+        //     { "fields", "0,1,2,3,33"  },
+        // }
+            RequestServiceType::OPTIONS_BOOK,
+            RequestCommandType::SUBS,
+            {
+                { "keys", "NVDA  241220C00140000" },
+                { "fields", "0,1,2,3" },
+            }
     );
     std::string testSubRequest2 = batchStreamRequests(
         constructStreamRequest(
-            RequestServiceType::LEVELONE_EQUITIES,
+            RequestServiceType::NASDAQ_BOOK,
             RequestCommandType::ADD,
             {
                 { "keys", "NVDA" },
-                { "fields", "0,1,2,3,33"  },
+                { "fields", "0,1,2,3" },
             }
         ),
         constructStreamRequest(
@@ -122,11 +128,11 @@ void Streamer::start()
             RequestCommandType::ADD,
             {
                 { "keys", "PLTR" },
-                { "fields", "0,1,2,3"  },
+                { "fields", "0,1,2,3" },
             }
         )
     );
-    asyncRequest(testSubRequest1);
+    // asyncRequest(testSubRequest1);
     asyncRequest(testSubRequest2);
 }
 
@@ -365,6 +371,7 @@ std::string Streamer::requestServiceType2String(RequestServiceType type)
         case RequestServiceType::LEVELONE_EQUITIES: return "LEVELONE_EQUITIES";
         case RequestServiceType::NYSE_BOOK:         return "NYSE_BOOK";
         case RequestServiceType::NASDAQ_BOOK:       return "NASDAQ_BOOK";
+        case RequestServiceType::OPTIONS_BOOK:      return "OPTIONS_BOOK";
     }
 }
 
