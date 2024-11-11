@@ -34,6 +34,11 @@ public:
     void                        pauseStreamer();
     void                        resumeStreamer();
 
+    // --- sync api --- (returns string response, user is responsible of parsing)
+    using HttpRequestQueries = std::unordered_map<std::string, std::string>;
+    std::string                 accountInfo(const std::string& accountNumber = "");
+    std::string                 syncRequest(std::string url, HttpRequestQueries queries = {});  // common helper
+
 private:
     void                        loadCredentials(const std::filesystem::path& appCredentialPath);
     void                        init(const std::filesystem::path& appCredentialPath, LogLevel level);

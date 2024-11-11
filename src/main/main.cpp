@@ -12,21 +12,26 @@ int main(int argc, char** argv) {
 
     {
         schwabcpp::Client client(logLevel);
-        client.startStreamer();
 
-        std::this_thread::sleep_for(std::chrono::seconds(10));
+        auto info = client.accountInfo();
 
-        // TEST: testing pause resume
-        {
-            std::this_thread::sleep_for(std::chrono::seconds(5));
-            client.pauseStreamer();
-            std::this_thread::sleep_for(std::chrono::seconds(5));
-            client.resumeStreamer();
-        }
+        std::cout << info << std::endl;
 
-        std::this_thread::sleep_for(std::chrono::seconds(10));
-
-        client.stopStreamer();
+        // client.startStreamer();
+        //
+        // std::this_thread::sleep_for(std::chrono::seconds(10));
+        //
+        // // TEST: testing pause resume
+        // {
+        //     std::this_thread::sleep_for(std::chrono::seconds(5));
+        //     client.pauseStreamer();
+        //     std::this_thread::sleep_for(std::chrono::seconds(5));
+        //     client.resumeStreamer();
+        // }
+        //
+        // std::this_thread::sleep_for(std::chrono::seconds(10));
+        //
+        // client.stopStreamer();
     }
 
     std::cout << "Program exited normally" << std::endl;

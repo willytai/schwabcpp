@@ -33,6 +33,8 @@ static spdlog::level::level_enum to_spdlog_log_level(Client::LogLevel level)
     }
 }
 
+const static std::string s_traderAPIBaseUrl = "https://api.schwabapi.com/trader/v1";
+
 }
 
 Client::Client()
@@ -120,6 +122,90 @@ void Client::loadCredentials(const std::filesystem::path& appCredentialPath)
     } else {
         LOG_FATAL("Unable to open the app credentials file: {}", appCredentialPath.string());
     }
+}
+
+// -- sync api
+std::string Client::accountInfo(const std::string& accountNumber)
+{
+    std::string finalUrl = s_traderAPIBaseUrl + "/accounts";
+
+    // first, get the hash value for the account number
+    if (!accountNumber.empty()) {
+        std::string url = s_traderAPIBaseUrl + "/accounts/accountNumbers";
+        std::vector<json> accountNumbersData = json::parse(syncRequest(url));
+        // find the hash
+        std::string accountHash;
+        for (const auto& data : accountNumbersData) {
+            if (data.at("accountNumber") == accountNumber) {
+                accountHash = data.at("hashValue");
+                break;
+            }
+        }
+        // embed
+        finalUrl += "/" + accountHash;
+    }
+
+    HttpRequestQueries queries = {
+        // {"fields", "positions"}
+    };
+
+    return std::move(syncRequest(finalUrl, std::move(queries)));
+}
+
+std::string Client::syncRequest(std::string url, HttpRequestQueries queries)
+{
+
+    std::string response;
+
+    // init curl
+    CURL* curl = curl_easy_init();
+    if (curl) {
+        // embed queries
+        if (!queries.empty()) {
+            std::string queryString = std::accumulate(
+                queries.begin(),
+                queries.end(),
+                std::string(),
+                [] (std::string acc, const std::pair<std::string, std::string>& val) {
+                    if (!acc.empty()) {
+                        acc += "&";
+                    }
+                    return acc + val.first + "=" + val.second;
+                }
+            );
+            url += "?" + queryString;
+        }
+
+        // set the url for the request
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+
+        // header
+        struct curl_slist* headers = NULL;
+        headers = curl_slist_append(headers, ("Authorization: Bearer " + getAccessToken()).c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+        // 5 seconds timeout
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+
+        // write callback
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+
+        // send
+        CURLcode res = curl_easy_perform(curl);
+        if (res != CURLE_OK) {
+            response.clear();
+            LOG_ERROR("curl_easy_perform(...) failed: {}", curl_easy_strerror(res));
+        } else {
+            LOG_TRACE("Response data: {}", response);
+        }
+
+        // cleanup
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+    }
+
+    return std::move(response);
 }
 
 // -- OAuth Flow
@@ -422,7 +508,7 @@ std::string Client::getAccessToken() const
 
 bool Client::requestUserPreferences(std::string& responseData) const
 {
-    const std::string __preferenceURL = "https://api.schwabapi.com/trader/v1/userPreference";
+    const std::string __preferenceURL = s_traderAPIBaseUrl + "/userPreference";
 
     bool result = false;
 
