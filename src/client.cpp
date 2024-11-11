@@ -125,7 +125,7 @@ void Client::loadCredentials(const std::filesystem::path& appCredentialPath)
 }
 
 // -- sync api
-std::string Client::accountInfo(const std::string& accountNumber)
+AccountSummary Client::accountSummary(const std::string& accountNumber)
 {
     std::string finalUrl = s_traderAPIBaseUrl + "/accounts";
 
@@ -149,8 +149,38 @@ std::string Client::accountInfo(const std::string& accountNumber)
         // {"fields", "positions"}
     };
 
-    return std::move(syncRequest(finalUrl, std::move(queries)));
+    // process the json data
+    return std::move(
+        json::parse(
+            std::move(
+                syncRequest(
+                    finalUrl, std::move(queries)
+                )
+            )
+        ).get<AccountSummary>()
+    );
 }
+
+AccountsSummaryMap Client::accountSummary()
+{
+    std::string finalUrl = s_traderAPIBaseUrl + "/accounts";
+
+    HttpRequestQueries queries = {
+        // {"fields", "positions"}
+    };
+
+    // process the json data
+    return std::move(
+        json::parse(
+            std::move(
+                syncRequest(
+                    finalUrl, std::move(queries)
+                )
+            )
+        ).get<AccountsSummaryMap>()
+    );
+}
+
 
 std::string Client::syncRequest(std::string url, HttpRequestQueries queries)
 {

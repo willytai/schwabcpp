@@ -1,4 +1,5 @@
 #include "client.h"
+#include "nlohmann/json.hpp"
 #include <iostream>
 
 // NOTE: <leader>uf toggles buffer auto foramtting
@@ -13,9 +14,14 @@ int main(int argc, char** argv) {
     {
         schwabcpp::Client client(logLevel);
 
-        auto info = client.accountInfo();
+        auto info = client.accountSummary();
 
-        std::cout << info << std::endl;
+        std::cout << info.summary["49339068"].aggregatedBalance.liquidationValue << std::endl;
+        std::cout << info.summary["49339068"].aggregatedBalance.currentLiquidationValue << std::endl;
+        std::cout << info.summary["49339068"].securitiesAccount.currentBalances.unsettledCash << std::endl;
+        std::cout << info.summary["49339068"].securitiesAccount.isDayTrader << std::endl;
+
+        // std::cout << info.dump() << std::endl;
 
         // client.startStreamer();
         //

@@ -7,6 +7,7 @@
 #include <thread>
 #include <memory>
 #include <filesystem>
+#include "schema/schema.h"
 
 namespace schwabcpp {
 
@@ -36,7 +37,8 @@ public:
 
     // --- sync api --- (returns string response, user is responsible of parsing)
     using HttpRequestQueries = std::unordered_map<std::string, std::string>;
-    std::string                 accountInfo(const std::string& accountNumber = "");
+    AccountSummary              accountSummary(const std::string& accountNumber);
+    AccountsSummaryMap          accountSummary();
     std::string                 syncRequest(std::string url, HttpRequestQueries queries = {});  // common helper
 
 private:

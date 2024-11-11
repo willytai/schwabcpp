@@ -28,6 +28,7 @@ include_directories(
     src
     external/base64/include
     external/spdlog/include
+    external/nlohmann_json/include
     ${Boost_INCLUDE_DIR}
     ${OPENSSL_INCLUDE_DIR}
 )
@@ -46,7 +47,6 @@ target_link_libraries(schwabcpp PRIVATE
     OpenSSL::Crypto
     spdlog::spdlog
 )
-
 # build the test executable if we are top level
 if (schwabcpp_IS_TOP_LEVEL)
     message("Test for schwabcpp turned on.")
