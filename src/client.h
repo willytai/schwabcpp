@@ -7,6 +7,7 @@
 #include <thread>
 #include <memory>
 #include <filesystem>
+#include <condition_variable>
 #include "schema/schema.h"
 
 namespace schwabcpp {
