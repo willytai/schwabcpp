@@ -4,11 +4,10 @@
 #include <string>
 #include <chrono>
 #include <mutex>
-#include <thread>
 #include <memory>
 #include <filesystem>
-#include <condition_variable>
 #include "schema/schema.h"
+#include "utils/timer.h"
 
 namespace schwabcpp {
 
@@ -59,9 +58,6 @@ private:
     bool                        writeTokens(const clock::time_point& accessTokenTS, const clock::time_point& refreshTokenTS, const std::string& responseData);
     TokenStatus                 updateTokens();
 
-    // --- Token Checker Daemon's Job ---
-    void                        checkTokens();
-
     // --- Token Access for Streamer Class (Thread-Safe) ---
     friend class Streamer;
     std::string                 getAccessToken() const;
@@ -85,10 +81,7 @@ private:
     mutable std::mutex          m_mutex;
 
     // --- token checker daemon ---
-    std::thread                 m_tokenCheckerDaemon;
-    bool                        m_stopCheckerDaemon;
-    mutable std::mutex          m_tokenCheckerMutex;
-    std::condition_variable     m_tokenCheckerCV;
+    Timer                       m_tokenCheckerDaemon;
 
     // --- streamer ---
     std::unique_ptr<Streamer>   m_streamer;

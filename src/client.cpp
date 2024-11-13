@@ -9,7 +9,6 @@
 #include <fstream>
 #include <chrono>
 #include <filesystem>
-#include <thread>
 
 namespace schwabcpp {
 
@@ -38,25 +37,21 @@ const static std::string s_traderAPIBaseUrl = "https://api.schwabapi.com/trader/
 }
 
 Client::Client()
-    : m_stopCheckerDaemon(false)
 {
     init("./.appCredentials.json", LogLevel::Debug);
 }
 
 Client::Client(LogLevel level)
-    : m_stopCheckerDaemon(false)
 {
     init("./.appCredentials.json", level);
 }
 
 Client::Client(const std::filesystem::path& appCredentialPath)
-    : m_stopCheckerDaemon(false)
 {
     init(appCredentialPath, LogLevel::Debug);
 }
 
 Client::Client(const std::filesystem::path& appCredentialPath, LogLevel level)
-    : m_stopCheckerDaemon(false)
 {
     init(appCredentialPath, level);
 }
@@ -70,19 +65,10 @@ Client::~Client()
 
     // stop the token checker daemon
     LOG_TRACE("Shutting down token checker daemon...");
-    {
-        std::lock_guard lock(m_tokenCheckerMutex);
-        m_stopCheckerDaemon = true;
-    }
-    m_tokenCheckerCV.notify_all();
+    m_tokenCheckerDaemon.stop();  // this blocks
 
     // curl cleanup
     curl_global_cleanup();
-
-    // block here
-    if (m_tokenCheckerDaemon.joinable()) {
-        m_tokenCheckerDaemon.join();
-    }
 }
 
 void Client::startStreamer()
@@ -279,7 +265,11 @@ void Client::init(const std::filesystem::path& appCredentialPath, LogLevel level
 
     // start the token checker daemon
     LOG_INFO("Launching token checker daemon.");
-    m_tokenCheckerDaemon = std::thread(&Client::checkTokens, this);
+    m_tokenCheckerDaemon.start(
+        std::chrono::seconds(30),                // update every 30 seconds
+        std::bind(&Client::updateTokens, this),
+        true                                     // fire callback on start
+    );
 
     // create the streamer
     m_streamer = std::make_unique<Streamer>(this);
@@ -383,8 +373,8 @@ Client::TokenStatus Client::updateTokens()
         } else {
             status = TokenStatus::UpdateSucceeded;
 
-            // resume streamer
-            if (m_streamer) {
+            // resume streamer if paused
+            if (m_streamer && m_streamer->isPaused()) {
                 m_streamer->resume();
             }
         }
@@ -507,26 +497,6 @@ std::string Client::getAuthorizationCode()
     LOG_TRACE("authorizationCode: {}", result);
 
     return result;
-}
-
-// -- Token Checker Daemon's Job
-
-void Client::checkTokens()
-{
-    // check if update required every 30 seconds
-    std::unique_lock lock(m_tokenCheckerMutex);
-    while (!m_stopCheckerDaemon) {
-        lock.unlock();
-
-        TokenStatus tokenStatus = updateTokens();
-
-        lock.lock();
-        if (m_tokenCheckerCV.wait_for(lock, std::chrono::seconds(30), [this] { return m_stopCheckerDaemon; })) {
-            break;
-        }
-    }
-
-    LOG_TRACE("Token checker daemon stopped.");
 }
 
 // -- Thread Safe Token Access

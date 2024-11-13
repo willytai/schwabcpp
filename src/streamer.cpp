@@ -221,6 +221,8 @@ void Streamer::onWebsocketConnected()
 
 void Streamer::stop()
 {
+    LOG_TRACE("Stopping streamer...");
+
     // update the flags
     {
         std::lock_guard lock(m_mutex_state);
@@ -283,6 +285,12 @@ void Streamer::resume()
     } else {
         LOG_DEBUG("Streamer not paused, cannot resume.");
     }
+}
+
+bool Streamer::isPaused() const
+{
+    std::lock_guard lock(m_mutex_state);
+    return m_state.testState(CVState::Paused);
 }
 
 void Streamer::asyncRequest(const std::string& request, std::function<void()> callback)
