@@ -7,8 +7,6 @@
 #include <chrono>
 #include <condition_variable>
 
-#include <iostream>
-
 namespace schwabcpp {
 
 class Timer
@@ -37,7 +35,6 @@ public:
                 lock.unlock();
 
                 if (fireOnStart) {
-                    std::cout << "firing... " << std::endl;
                     callback();
                 }
 
@@ -49,7 +46,6 @@ public:
                 }
 
                 if (!fireOnStart) {
-                    std::cout << "firing... " << std::endl;
                     callback();
                 }
             }
