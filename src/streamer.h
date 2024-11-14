@@ -71,6 +71,7 @@ public:
     // does nothing if already running
     void                        resume();
 
+    bool                        isActive() const;
     bool                        isPaused() const;
 
     void                        asyncRequest(const std::string& request, std::function<void()> callback = {});

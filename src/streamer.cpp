@@ -287,6 +287,12 @@ void Streamer::resume()
     }
 }
 
+bool Streamer::isActive() const
+{
+    std::lock_guard lock(m_mutex_state);
+    return m_state.testState(CVState::Active);
+}
+
 bool Streamer::isPaused() const
 {
     std::lock_guard lock(m_mutex_state);

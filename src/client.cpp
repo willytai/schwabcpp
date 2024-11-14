@@ -357,8 +357,8 @@ Client::TokenStatus Client::updateTokens()
     if (accessTokenValidTime < __access_token_update_threshold) {
         LOG_INFO("Access token expired, updating automatically.");
 
-        // pause streamer
-        if (m_streamer) {
+        // pause streamer if active
+        if (m_streamer && m_streamer->isActive()) {
             m_streamer->pause();
         }
 
