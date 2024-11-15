@@ -1,5 +1,9 @@
 #include "client.h"
 #include "nlohmann/json.hpp"
+#include "spdlog/async.h"
+#include "spdlog/sinks/rotating_file_sink.h"
+#include "spdlog/sinks/stdout_color_sinks.h"
+#include "spdlog/spdlog.h"
 #include <iostream>
 
 // NOTE: <leader>uf toggles buffer auto foramtting
@@ -11,8 +15,18 @@ int main(int argc, char** argv) {
         logLevel = schwabcpp::Client::LogLevel::Trace;
     }
 
+    spdlog::init_thread_pool(8192, 2);
+    std::vector<spdlog::sink_ptr> sinks = {
+        std::make_shared<spdlog::sinks::stdout_color_sink_mt>(),
+        std::make_shared<spdlog::sinks::rotating_file_sink_mt>("test.log", 1024 * 1024 * 5, 10),
+    };
+    auto logger = std::make_shared<spdlog::async_logger>("native discord bot", sinks.begin(), sinks.end(), spdlog::thread_pool(), spdlog::async_overflow_policy::block);
+    spdlog::register_logger(logger);
+    logger->set_pattern("%^[%Y-%m-%d %X] [%L] %v%$");
+    logger->set_level(spdlog::level::level_enum::trace);
+
     {
-        schwabcpp::Client client(logLevel);
+        schwabcpp::Client client(logger);
 
         auto info = client.accountSummary();
 
@@ -42,7 +56,7 @@ int main(int argc, char** argv) {
         std::this_thread::sleep_for(std::chrono::seconds(30));
     }
 
-    std::cout << "Program exited normally" << std::endl;
+    logger->info("Program exited normally.");
 
     return 0;
 }

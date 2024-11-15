@@ -12,8 +12,16 @@ public:
     Logger() = default;
     ~Logger() = default;
 
+    // creates a new logger
     // default turns off trace
     static void init(spdlog::level::level_enum logLevel = spdlog::level::debug);
+
+    // use an exiting one
+    static void setLogger(std::shared_ptr<spdlog::logger> logger);
+
+    // provides api to release the underlying logger
+    static void releaseLogger();
+
     static inline std::shared_ptr<spdlog::logger> getLogger() { return __logger; }
 
 private:

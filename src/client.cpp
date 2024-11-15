@@ -46,6 +46,11 @@ Client::Client(LogLevel level)
     init("./.appCredentials.json", level);
 }
 
+Client::Client(std::shared_ptr<spdlog::logger> logger)
+{
+    init("./.appCredentials.json", LogLevel::Debug, logger);
+}
+
 Client::Client(const std::filesystem::path& appCredentialPath)
 {
     init(appCredentialPath, LogLevel::Debug);
@@ -54,6 +59,11 @@ Client::Client(const std::filesystem::path& appCredentialPath)
 Client::Client(const std::filesystem::path& appCredentialPath, LogLevel level)
 {
     init(appCredentialPath, level);
+}
+
+Client::Client(const std::filesystem::path& appCredentialPath, std::shared_ptr<spdlog::logger> logger)
+{
+    init(appCredentialPath, LogLevel::Debug, logger);
 }
 
 Client::~Client()
@@ -69,6 +79,9 @@ Client::~Client()
 
     // curl cleanup
     curl_global_cleanup();
+
+    // now, we relase the logger
+    Logger::releaseLogger();
 }
 
 void Client::startStreamer()
@@ -226,9 +239,14 @@ std::string Client::syncRequest(std::string url, HttpRequestQueries queries)
 
 // -- OAuth Flow
 
-void Client::init(const std::filesystem::path& appCredentialPath, LogLevel level)
+void Client::init(const std::filesystem::path& appCredentialPath, LogLevel level, std::shared_ptr<spdlog::logger> logger)
 {
-    Logger::init(to_spdlog_log_level(level));
+    // create a logger unless one is already provided
+    if (logger) {
+        Logger::setLogger(logger);
+    } else {
+        Logger::init(to_spdlog_log_level(level));
+    }
 
     LOG_INFO("Initializing client.");
 
