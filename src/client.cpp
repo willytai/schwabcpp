@@ -16,19 +16,39 @@ using json = nlohmann::json;
 
 namespace {
 
-size_t writeCallback(void* contents, size_t size, size_t nmemb, std::string* buffer) {
+// -- callbacks
+
+size_t writeCallback(void* contents, size_t size, size_t nmemb, std::string* buffer)
+{
     size_t totalSize = size * nmemb;
     buffer->append(static_cast<char*>(contents), totalSize);
     return totalSize;
 }
 
+std::string defaultOAuthUrlRequestCallback(const std::string& url)
+{
+    // requests the redirected url from terminal
+    LOG_INFO("Go to: {} and login.", url);
+    LOG_INFO("Paste the redirected url here after logging in:");
+
+    std::string authorizationRedirectedURL;
+    std::cin >> authorizationRedirectedURL;
+
+    return authorizationRedirectedURL;
+}
+
+// -- some static variables
+
 static std::string tokenCacheFile = ".tokens.json";
+
+// -- utilities
 
 static spdlog::level::level_enum to_spdlog_log_level(Client::LogLevel level)
 {
     switch(level) {
         case Client::LogLevel::Debug: return spdlog::level::debug;
         case Client::LogLevel::Trace: return spdlog::level::trace;
+        default: return spdlog::level::debug;
     }
 }
 
@@ -36,34 +56,63 @@ const static std::string s_traderAPIBaseUrl = "https://api.schwabapi.com/trader/
 
 }
 
-Client::Client()
+Client::Client(const Spec& spec)
 {
-    init("./.appCredentials.json", LogLevel::Debug);
-}
+    // create a logger unless one is already provided
+    if (spec.logger) {
+        Logger::setLogger(spec.logger);
 
-Client::Client(LogLevel level)
-{
-    init("./.appCredentials.json", level);
-}
+        // if log level is also specified, overwite
+        if (spec.logLevel != LogLevel::Unspecified) {
+            Logger::setLogLevel(to_spdlog_log_level(spec.logLevel));
+        }
+    } else {
+        // logger is not specified, create a default one with the provide log level
+        // if log level not specified, defaults to debug
+        Logger::init(to_spdlog_log_level(spec.logLevel));
+    }
 
-Client::Client(std::shared_ptr<spdlog::logger> logger)
-{
-    init("./.appCredentials.json", LogLevel::Debug, logger);
-}
+    LOG_INFO("Initializing client.");
 
-Client::Client(const std::filesystem::path& appCredentialPath)
-{
-    init(appCredentialPath, LogLevel::Debug);
-}
+    // we are going to to a bunch of curl, init it here
+    curl_global_init(CURL_GLOBAL_DEFAULT);
 
-Client::Client(const std::filesystem::path& appCredentialPath, LogLevel level)
-{
-    init(appCredentialPath, level);
-}
+    loadCredentials(spec.appCredentialPath);
 
-Client::Client(const std::filesystem::path& appCredentialPath, std::shared_ptr<spdlog::logger> logger)
-{
-    init(appCredentialPath, LogLevel::Debug, logger);
+    // set the OAuth callback
+    m_oAuthUrlRequestCallback = spec.oAuthCallback ?
+                                spec.oAuthCallback : defaultOAuthUrlRequestCallback;
+
+    // authorization flow starts
+    TokenStatus tokenStatus = TokenStatus::Failed;
+
+    // try to get the tokens from the cache
+    if (!loadTokens()) {
+        // load failed (usually because of not cache data), run the full OAuth flow
+        tokenStatus = runOAuth();
+    } else {
+        // loaded cached tokens, check if update required
+        if (updateTokens() == UpdateStatus::Failed) {
+            // this means tokens are loaded but refresh token expired, cannot update
+            // need to re-authorize
+            tokenStatus = runOAuth();
+        } else {
+            tokenStatus = TokenStatus::Good;
+        }
+    }
+
+    // start the token checker daemon
+    LOG_INFO("Launching token checker daemon.");
+    m_tokenCheckerDaemon.start(
+        std::chrono::seconds(30),                // update every 30 seconds
+        std::bind(&Client::updateTokens, this)
+    );
+
+    // create the streamer
+    m_streamer = std::make_unique<Streamer>(this);
+
+    LOG_INFO("Client initialized.");
+
 }
 
 Client::~Client()
@@ -106,20 +155,24 @@ void Client::resumeStreamer()
 
 void Client::loadCredentials(const std::filesystem::path& appCredentialPath)
 {
-    std::ifstream file(appCredentialPath);
-    if (file.is_open()) {
-        json credentialData;
-        file >> credentialData;
+    if (std::filesystem::exists(appCredentialPath)) {
+        std::ifstream file(appCredentialPath);
+        if (file.is_open()) {
+            json credentialData;
+            file >> credentialData;
 
-        if (credentialData.contains("app_key") &&
-            credentialData.contains("app_secret")) {
-            m_key = credentialData["app_key"];
-            m_secret = credentialData["app_secret"];
+            if (credentialData.contains("app_key") &&
+                credentialData.contains("app_secret")) {
+                m_key = credentialData["app_key"];
+                m_secret = credentialData["app_secret"];
+            } else {
+                LOG_FATAL("App credentials missing!!");
+            }
         } else {
-            LOG_FATAL("App credentials missing!!");
+            LOG_FATAL("Unable to open the app credentials file: {}", appCredentialPath.string());
         }
     } else {
-        LOG_FATAL("Unable to open the app credentials file: {}", appCredentialPath.string());
+        LOG_FATAL("App credentials file: {} not found. Did you specify the right path?", appCredentialPath.string());
     }
 }
 
@@ -149,15 +202,13 @@ AccountSummary Client::accountSummary(const std::string& accountNumber)
     };
 
     // process the json data
-    return std::move(
-        json::parse(
-            std::move(
-                syncRequest(
-                    finalUrl, std::move(queries)
-                )
+    return json::parse(
+        std::move(
+            syncRequest(
+                finalUrl, std::move(queries)
             )
-        ).get<AccountSummary>()
-    );
+        )
+    ).get<AccountSummary>();
 }
 
 AccountsSummaryMap Client::accountSummary()
@@ -169,15 +220,13 @@ AccountsSummaryMap Client::accountSummary()
     };
 
     // process the json data
-    return std::move(
-        json::parse(
-            std::move(
-                syncRequest(
-                    finalUrl, std::move(queries)
-                )
+    return json::parse(
+        std::move(
+            syncRequest(
+                finalUrl, std::move(queries)
             )
-        ).get<AccountsSummaryMap>()
-    );
+        )
+    ).get<AccountsSummaryMap>();
 }
 
 
@@ -234,66 +283,10 @@ std::string Client::syncRequest(std::string url, HttpRequestQueries queries)
         curl_easy_cleanup(curl);
     }
 
-    return std::move(response);
+    return response;
 }
 
 // -- OAuth Flow
-
-void Client::init(const std::filesystem::path& appCredentialPath, LogLevel level, std::shared_ptr<spdlog::logger> logger)
-{
-    // create a logger unless one is already provided
-    if (logger) {
-        Logger::setLogger(logger);
-    } else {
-        Logger::init(to_spdlog_log_level(level));
-    }
-
-    LOG_INFO("Initializing client.");
-
-    // we are going to to a bunch of curl, init it here
-    curl_global_init(CURL_GLOBAL_DEFAULT);
-
-    loadCredentials(appCredentialPath);
-
-    TokenStatus tokenStatus = TokenStatus::NoTokens;
-
-    // try to get the tokens from the cache
-    if (!loadTokens()) {
-        // run the full OAuth flow
-        //   - request authorization from user
-        //   - and then request the tokens with the authorization code
-        std::string responseData;
-        getTokens("authorization_code", getAuthorizationCode(), responseData);
-
-        // write the tokens
-        clock::time_point now = clock::now();
-        if (writeTokens(now, now, responseData)) {
-            tokenStatus = TokenStatus::UpdateSucceeded;
-        }
-
-    } else {
-        // check if update required and update if needed
-        tokenStatus = updateTokens();
-    }
-
-    // NOTE:
-    // Exiting if unable to get the tokens for the first try for now
-    if (tokenStatus != TokenStatus::UpdateSucceeded &&
-        tokenStatus != TokenStatus::UpdateNotRequired) exit(1);
-
-    // start the token checker daemon
-    LOG_INFO("Launching token checker daemon.");
-    m_tokenCheckerDaemon.start(
-        std::chrono::seconds(30),                // update every 30 seconds
-        std::bind(&Client::updateTokens, this),
-        true                                     // fire callback on start
-    );
-
-    // create the streamer
-    m_streamer = std::make_unique<Streamer>(this);
-
-    LOG_INFO("Client initialized.");
-}
 
 bool Client::loadTokens()
 {
@@ -331,7 +324,7 @@ bool Client::loadTokens()
                           std::chrono::duration_cast<std::chrono::hours>(clock::now() - m_refreshTokenTS).count());
                 LOG_INFO("Tokens loaded.");
             } else {
-                LOG_INFO("Token data corrupted, please re-authorize.");
+                LOG_INFO("Token data corruptedu please re-authorize.");
             }
         } else {
             LOG_INFO("Token cache corrupted, please re-authorize.");
@@ -343,13 +336,33 @@ bool Client::loadTokens()
     return result;
 }
 
-Client::TokenStatus Client::updateTokens()
+Client::TokenStatus Client::runOAuth()
+{
+    TokenStatus tokenStatus = TokenStatus::Failed;
+
+    // Step 1 -- Get the authorization code
+    std::string authorizationCode = getAuthorizationCode();
+
+    // Step 2 -- Get the tokens
+    std::string responseData;
+    getTokens("authorization_code", authorizationCode, responseData);
+
+    // write the tokens
+    clock::time_point now = clock::now();
+    if (writeTokens(now, now, responseData)) {
+        tokenStatus = TokenStatus::Good;
+    }
+
+    return tokenStatus;
+}
+
+Client::UpdateStatus Client::updateTokens()
 {
     // NOTE:
     // This automatically pauses the streamer while updating the tokens
     // and resumes it after a successful update if the streamer is active.
 
-    TokenStatus status = TokenStatus::UpdateNotRequired;
+    UpdateStatus status = UpdateStatus::NotRequired;
 
     // 7 days according to schwab
     const clock::duration __refresh_token_timeout(std::chrono::hours(7 * 24));
@@ -367,7 +380,7 @@ Client::TokenStatus Client::updateTokens()
     clock::duration refreshTokenValidTime = (__refresh_token_timeout - (clock::now() - m_refreshTokenTS));
     if (refreshTokenValidTime < __refresh_token_update_threshold) {
         LOG_WARN("Refresh token expired, please re-authorize.");
-        return TokenStatus::UpdateFailed;
+        return UpdateStatus::Failed;
     }
 
     // check if we need to update access token
@@ -387,9 +400,9 @@ Client::TokenStatus Client::updateTokens()
         // save the tokens
         clock::time_point now = clock::now();
         if (!writeTokens(now, m_refreshTokenTS, responseData)) {
-            status = TokenStatus::UpdateFailed;
+            status = UpdateStatus::Failed;
         } else {
-            status = TokenStatus::UpdateSucceeded;
+            status = UpdateStatus::Succeeded;
 
             // resume streamer if paused
             if (m_streamer && m_streamer->isPaused()) {
@@ -494,11 +507,8 @@ std::string Client::getAuthorizationCode()
         "https://api.schwabapi.com/v1/oauth/authorize?client_id=" + m_key +
         "&redirect_uri=https://127.0.0.1";
 
-    LOG_INFO("Go to: {} and login.", authorizationURL);
-    LOG_INFO("Paste the redirected url here after logging in:");
-
-    std::string authorizationRedirectedURL;
-    std::cin >> authorizationRedirectedURL;
+    // request the redirected url with the callback
+    std::string authorizationRedirectedURL = m_oAuthUrlRequestCallback(authorizationURL);
 
     // this should be in the form of https://{APP_CALLBACK_URL}/?code={AUTHORIZATION_CODE}&session={SESSION_ID}
     size_t start = authorizationRedirectedURL.find("?code=");

@@ -19,6 +19,9 @@ public:
     // use an exiting one
     static void setLogger(std::shared_ptr<spdlog::logger> logger);
 
+    // allow log level control
+    static void setLogLevel(spdlog::level::level_enum logLevel);
+
     // provides api to release the underlying logger
     static void releaseLogger();
 

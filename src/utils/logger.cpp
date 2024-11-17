@@ -14,6 +14,12 @@ void Logger::init(spdlog::level::level_enum logLevel) {
     __logger->flush_on(spdlog::level::debug);
 }
 
+void Logger::setLogLevel(spdlog::level::level_enum logLevel) {
+    if (__logger) {
+        __logger->set_level(logLevel);
+    }
+}
+
 void Logger::setLogger(std::shared_ptr<spdlog::logger> logger) {
     __logger = logger;
 }

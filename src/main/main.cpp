@@ -15,6 +15,7 @@ int main(int argc, char** argv) {
         logLevel = schwabcpp::Client::LogLevel::Trace;
     }
 
+    // custom logger
     spdlog::init_thread_pool(8192, 2);
     std::vector<spdlog::sink_ptr> sinks = {
         std::make_shared<spdlog::sinks::stdout_color_sink_mt>(),
@@ -23,10 +24,13 @@ int main(int argc, char** argv) {
     auto logger = std::make_shared<spdlog::async_logger>("native discord bot", sinks.begin(), sinks.end(), spdlog::thread_pool(), spdlog::async_overflow_policy::block);
     spdlog::register_logger(logger);
     logger->set_pattern("%^[%Y-%m-%d %X] [%L] %v%$");
-    logger->set_level(spdlog::level::level_enum::trace);
+    logger->set_level(spdlog::level::level_enum::debug);
 
     {
-        schwabcpp::Client client(logger);
+        schwabcpp::Client client({
+            .logger = logger,
+            .logLevel = logLevel,
+        });
 
         auto info = client.accountSummary();
 
