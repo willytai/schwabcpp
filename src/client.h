@@ -22,15 +22,25 @@ class Streamer;
 class Client
 {
 public:
+    // --- allow custom callback when oauth is required ---
+    enum class AuthRequestReason : char {
+        InitialSetup,
+        RefreshTokenExpired,
+        PreviousAuthFailed,
+    };
+    // params
+    //   1. the url for the oauth
+    //   2. the reason the request was triggered
+    //   3. the number of chances left to run the oauth if something failed
+    using OAuthCallback = std::function<std::string(const std::string&, AuthRequestReason, int)>;
+
+    // --- allow named initialization with struct ---
     enum class LogLevel : char {
         Debug,
         Trace,
 
         Unspecified,
     };
-
-    // --- allow named initialization with struct ---
-    typedef std::function<std::string(const std::string&)> OAuthCallback;
     struct Spec {
         std::filesystem::path           appCredentialPath = "./.appCredentials.json";
         OAuthCallback                   oAuthCallback = {};
@@ -70,8 +80,8 @@ private:
         Succeeded,
         Failed,
     };
-    TokenStatus                         runOAuth();
-    std::string                         getAuthorizationCode();
+    TokenStatus                         runOAuth(AuthRequestReason reason, int chances = 3);  // you have 3 chances to run the oauth flow by default
+    std::string                         getAuthorizationCode(AuthRequestReason reason, int chances);
     void                                getTokens(const std::string& grantType, const std::string& code, std::string& responseData);
     bool                                writeTokens(const clock::time_point& accessTokenTS, const clock::time_point& refreshTokenTS, const std::string& responseData);
 
@@ -109,8 +119,7 @@ private:
     std::unique_ptr<Streamer>           m_streamer;
 
     // --- oath url request callback ---
-    std::function<std::string(const std::string&)>
-                                        m_oAuthUrlRequestCallback;
+    OAuthCallback                       m_oAuthUrlRequestCallback;
 };
 
 } // namespace schwabcpp

@@ -25,9 +25,14 @@ size_t writeCallback(void* contents, size_t size, size_t nmemb, std::string* buf
     return totalSize;
 }
 
-std::string defaultOAuthUrlRequestCallback(const std::string& url)
+std::string defaultOAuthUrlRequestCallback(const std::string& url, Client::AuthRequestReason requestReason, int chances)
 {
     // requests the redirected url from terminal
+    switch (requestReason) {
+        case Client::AuthRequestReason::InitialSetup: LOG_INFO("Please authorize to start the schwap client. You have {} chance(s) left.", chances); break;
+        case Client::AuthRequestReason::RefreshTokenExpired: LOG_INFO("Token expired, please reauthorize. You have {} chance(s) left.", chances); break;
+        case Client::AuthRequestReason::PreviousAuthFailed: LOG_ERROR("Previous authorization request failed. The redirected url expires rather fast. Make sure you paste it within 30 seconds. Please reauthorize. You have {} chance(s) left.", chances); break;
+    }
     LOG_INFO("Go to: {} and login.", url);
     LOG_INFO("Paste the redirected url here after logging in:");
 
@@ -89,29 +94,34 @@ Client::Client(const Spec& spec)
     // try to get the tokens from the cache
     if (!loadTokens()) {
         // load failed (usually because of not cache data), run the full OAuth flow
-        tokenStatus = runOAuth();
+        tokenStatus = runOAuth(AuthRequestReason::InitialSetup);
     } else {
         // loaded cached tokens, check if update required
         if (updateTokens() == UpdateStatus::Failed) {
             // this means tokens are loaded but refresh token expired, cannot update
-            // need to re-authorize
-            tokenStatus = runOAuth();
+            // need to reauthorize
+            tokenStatus = runOAuth(AuthRequestReason::RefreshTokenExpired);
         } else {
             tokenStatus = TokenStatus::Good;
         }
     }
 
-    // start the token checker daemon
-    LOG_INFO("Launching token checker daemon.");
-    m_tokenCheckerDaemon.start(
-        std::chrono::seconds(30),                // update every 30 seconds
-        std::bind(&Client::updateTokens, this)
-    );
+    if (tokenStatus == TokenStatus::Good) {
+        // start the token checker daemon
+        LOG_INFO("Launching token checker daemon.");
+        m_tokenCheckerDaemon.start(
+            std::chrono::seconds(30),                // update every 30 seconds
+            std::bind(&Client::updateTokens, this)
+        );
 
-    // create the streamer
-    m_streamer = std::make_unique<Streamer>(this);
+        // create the streamer
+        m_streamer = std::make_unique<Streamer>(this);
 
-    LOG_INFO("Client initialized.");
+        LOG_INFO("Client initialized.");
+    } else {
+        // TODO: client failed to initialize, should forbid any action on it.
+        LOG_ERROR("Failed to initialize client, please try again later.");
+    }
 
 }
 
@@ -324,10 +334,10 @@ bool Client::loadTokens()
                           std::chrono::duration_cast<std::chrono::hours>(clock::now() - m_refreshTokenTS).count());
                 LOG_INFO("Tokens loaded.");
             } else {
-                LOG_INFO("Token data corruptedu please re-authorize.");
+                LOG_INFO("Token data corruptedu please reauthorize.");
             }
         } else {
-            LOG_INFO("Token cache corrupted, please re-authorize.");
+            LOG_INFO("Token cache corrupted, please reauthorize.");
         }
     } else {
         LOG_INFO("Token cache not found, authorization required.");
@@ -336,21 +346,31 @@ bool Client::loadTokens()
     return result;
 }
 
-Client::TokenStatus Client::runOAuth()
+Client::TokenStatus Client::runOAuth(AuthRequestReason requestReqson, int chances)
 {
+    if (chances == 0) {
+        LOG_ERROR("You have no more chances left to authorize the client.");
+        return TokenStatus::Failed;
+    }
+
     TokenStatus tokenStatus = TokenStatus::Failed;
 
     // Step 1 -- Get the authorization code
-    std::string authorizationCode = getAuthorizationCode();
+    std::string authorizationCode = getAuthorizationCode(requestReqson, chances);
 
     // Step 2 -- Get the tokens
     std::string responseData;
     getTokens("authorization_code", authorizationCode, responseData);
 
-    // write the tokens
+    // Step 3 -- Write the tokens
     clock::time_point now = clock::now();
     if (writeTokens(now, now, responseData)) {
         tokenStatus = TokenStatus::Good;
+    }
+
+    // Step 4 -- Rerun if failed with chances left
+    if (tokenStatus != TokenStatus::Good) {
+        runOAuth(requestReqson, chances-1);
     }
 
     return tokenStatus;
@@ -376,10 +396,10 @@ Client::UpdateStatus Client::updateTokens()
     // 1 minute buffer time for access token update
     const clock::duration __access_token_update_threshold(std::chrono::minutes(1));
 
-    // check if we need to re-authorize
+    // check if we need to reauthorize
     clock::duration refreshTokenValidTime = (__refresh_token_timeout - (clock::now() - m_refreshTokenTS));
     if (refreshTokenValidTime < __refresh_token_update_threshold) {
-        LOG_WARN("Refresh token expired, please re-authorize.");
+        LOG_WARN("Refresh token expired, please reauthorize.");
         return UpdateStatus::Failed;
     }
 
@@ -499,7 +519,7 @@ void Client::getTokens(const std::string& grantType, const std::string& code, st
     }
 }
 
-std::string Client::getAuthorizationCode()
+std::string Client::getAuthorizationCode(AuthRequestReason reason, int chances)
 {
     std::string result;
 
@@ -508,7 +528,7 @@ std::string Client::getAuthorizationCode()
         "&redirect_uri=https://127.0.0.1";
 
     // request the redirected url with the callback
-    std::string authorizationRedirectedURL = m_oAuthUrlRequestCallback(authorizationURL);
+    std::string authorizationRedirectedURL = m_oAuthUrlRequestCallback(authorizationURL, reason, chances);
 
     // this should be in the form of https://{APP_CALLBACK_URL}/?code={AUTHORIZATION_CODE}&session={SESSION_ID}
     size_t start = authorizationRedirectedURL.find("?code=");
