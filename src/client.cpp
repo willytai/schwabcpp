@@ -334,7 +334,7 @@ bool Client::loadTokens()
                           std::chrono::duration_cast<std::chrono::hours>(clock::now() - m_refreshTokenTS).count());
                 LOG_INFO("Tokens loaded.");
             } else {
-                LOG_INFO("Token data corruptedu please reauthorize.");
+                LOG_INFO("Token data corrupted please reauthorize.");
             }
         } else {
             LOG_INFO("Token cache corrupted, please reauthorize.");
@@ -453,7 +453,7 @@ bool Client::writeTokens(AccessTokenResponse responseData)
         // cache the tokens
         std::ofstream tokenCache(tokenCacheFile, std::ofstream::trunc);
         if (tokenCache.is_open()) {
-            tokenCache << json{responseData}.dump(4);
+            tokenCache << json(responseData).dump(4);
 
             LOG_DEBUG("Tokens cached to {}.", tokenCacheFile);
         } else {
@@ -491,7 +491,7 @@ bool Client::writeTokens(RefreshTokenResponse responseData)
         // cache the tokens
         std::ofstream tokenCache(tokenCacheFile, std::ofstream::trunc);
         if (tokenCache.is_open()) {
-            tokenCache << json{responseData}.dump(4);
+            tokenCache << json(responseData).dump(4);
 
             LOG_DEBUG("Tokens cached to {}.", tokenCacheFile);
         } else {

@@ -55,7 +55,7 @@ void RefreshTokenResponse::from_json(const json& j, RefreshTokenResponse& self)
         j.at("expires_in").get_to(self.data.expiresIn);
         j.at("token_type").get_to(self.data.tokenType);
         j.at("scope").get_to(self.data.scope);
-        j.at("refreshToken").get_to(self.data.refreshToken);
+        j.at("refresh_token").get_to(self.data.refreshToken);
         j.at("access_token").get_to(self.data.accessToken);
         j.at("id_token").get_to(self.data.idToken);
 
