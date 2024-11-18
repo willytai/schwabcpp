@@ -369,7 +369,7 @@ Client::TokenStatus Client::runOAuth(AuthRequestReason requestReqson, int chance
 
     // Step 4 -- Rerun if failed with chances left
     if (tokenStatus != TokenStatus::Good) {
-        runOAuth(requestReqson, chances-1);
+        runOAuth(AuthRequestReason::PreviousAuthFailed, chances-1);
     }
 
     return tokenStatus;
