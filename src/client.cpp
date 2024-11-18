@@ -42,6 +42,15 @@ std::string defaultOAuthUrlRequestCallback(const std::string& url, Client::AuthR
     return authorizationRedirectedURL;
 }
 
+void defaultOAuthCompleteCallback(Client::AuthStatus status)
+{
+    switch (status) {
+        case Client::AuthStatus::Succeeded: LOG_INFO("OAuth successful."); break;
+        case Client::AuthStatus::Failed: LOG_ERROR("OAuth failed."); break;
+        case Client::AuthStatus::NotRequired: LOG_INFO("OAuth not required."); break;
+    }
+}
+
 // -- some static variables
 
 static std::string tokenCacheFile = ".tokens.json";
@@ -85,33 +94,49 @@ Client::Client(const Spec& spec)
     loadCredentials(spec.appCredentialPath);
 
     // set the OAuth callback
-    m_oAuthUrlRequestCallback = spec.oAuthCallback ?
-                                spec.oAuthCallback : defaultOAuthUrlRequestCallback;
+    m_oAuthUrlRequestCallback = spec.oAuthUrlRequestCallback ?
+                                spec.oAuthUrlRequestCallback : defaultOAuthUrlRequestCallback;
+    m_oAuthCompleteCallback = spec.oAuthCompleteCallback ?
+                              spec.oAuthCompleteCallback : defaultOAuthCompleteCallback;
 
     // authorization flow starts
-    TokenStatus tokenStatus = TokenStatus::Failed;
+    AuthStatus authStatus = AuthStatus::Failed;
 
     // try to get the tokens from the cache
     if (!loadTokens()) {
         // load failed (usually because of not cache data), run the full OAuth flow
-        tokenStatus = runOAuth(AuthRequestReason::InitialSetup);
+        authStatus = runOAuth(AuthRequestReason::InitialSetup);
     } else {
         // loaded cached tokens, check if update required
-        if (updateTokens() == UpdateStatus::Failed) {
+        UpdateStatus updateStatus = updateTokens();
+        if (updateStatus == UpdateStatus::Failed) {
             // this means tokens are loaded but refresh token expired, cannot update
             // need to reauthorize
-            tokenStatus = runOAuth(AuthRequestReason::RefreshTokenExpired);
+            authStatus = runOAuth(AuthRequestReason::RefreshTokenExpired);
+        } else if (updateStatus == UpdateStatus::NotRequired) {
+            authStatus = AuthStatus::NotRequired;
+        } else if (updateStatus == UpdateStatus::Succeeded) {
+            authStatus = AuthStatus::Succeeded;
         } else {
-            tokenStatus = TokenStatus::Good;
+            LOG_ERROR("Unrecognized UpdateStatus. Fix this!!");
         }
     }
 
-    if (tokenStatus == TokenStatus::Good) {
+    // NOTE: I am not sure if it is safe to trigger the m_oAuthCompleteCallback.
+    //       Consider if someone creates a client and has set a custom oAuthCompleteCallback.
+    //       If that callback tries to call a member function of us, that leads to undefined behavior.
+    //       (calling member functions of unintialized objects)
+    if (m_oAuthCompleteCallback) {
+        m_oAuthCompleteCallback(authStatus);
+    }
+
+    if (authStatus == AuthStatus::Succeeded ||
+        authStatus == AuthStatus::NotRequired) {
         // start the token checker daemon
         LOG_INFO("Launching token checker daemon.");
         m_tokenCheckerDaemon.start(
-            std::chrono::seconds(30),                // update every 30 seconds
-            std::bind(&Client::updateTokens, this)
+            std::chrono::seconds(30),
+            std::bind(&Client::checkTokensAndReauth, this)
         );
 
         // create the streamer
@@ -346,14 +371,14 @@ bool Client::loadTokens()
     return result;
 }
 
-Client::TokenStatus Client::runOAuth(AuthRequestReason requestReqson, int chances)
+Client::AuthStatus Client::runOAuth(AuthRequestReason requestReqson, int chances)
 {
     if (chances == 0) {
         LOG_ERROR("You have no more chances left to authorize the client.");
-        return TokenStatus::Failed;
+        return AuthStatus::Failed;
     }
 
-    TokenStatus tokenStatus = TokenStatus::Failed;
+    AuthStatus authStatus = AuthStatus::Failed;
 
     // Step 1 -- Get the authorization code
     std::string authorizationCode = getAuthorizationCode(requestReqson, chances);
@@ -364,15 +389,15 @@ Client::TokenStatus Client::runOAuth(AuthRequestReason requestReqson, int chance
 
     // Step 3 -- Write the tokens
     if (writeTokens(std::move(json::parse(responseData).get<AccessTokenResponse>()))) {
-        tokenStatus = TokenStatus::Good;
+        authStatus = AuthStatus::Succeeded;
     }
 
     // Step 4 -- Rerun if failed with chances left
-    if (tokenStatus != TokenStatus::Good) {
-        runOAuth(AuthRequestReason::PreviousAuthFailed, chances-1);
+    if (authStatus == AuthStatus::Failed) {
+        authStatus = runOAuth(AuthRequestReason::PreviousAuthFailed, chances-1);
     }
 
-    return tokenStatus;
+    return authStatus;
 }
 
 Client::UpdateStatus Client::updateTokens()
@@ -626,6 +651,17 @@ bool Client::requestUserPreferences(std::string& responseData) const
     }
 
     return result;
+}
+
+void Client::checkTokensAndReauth()
+{
+    // call updateTokens, rerun oauth if failed
+    if (updateTokens() == UpdateStatus::Failed) {
+        AuthStatus status = runOAuth(AuthRequestReason::RefreshTokenExpired);
+        if (m_oAuthCompleteCallback) {
+            m_oAuthCompleteCallback(status);
+        }
+    }
 }
 
 } // namespace schwabcpp

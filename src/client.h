@@ -26,11 +26,17 @@ public:
         RefreshTokenExpired,
         PreviousAuthFailed,
     };
+    enum class AuthStatus : char {
+        Succeeded,
+        Failed,
+        NotRequired,
+    };
     // params
     //   1. the url for the oauth
     //   2. the reason the request was triggered
     //   3. the number of chances left to run the oauth if something failed
-    using OAuthCallback = std::function<std::string(const std::string&, AuthRequestReason, int)>;
+    using OAuthUrlRequestCallback = std::function<std::string(const std::string&, AuthRequestReason, int)>;
+    using OAuthCompleteCallback = std::function<void(AuthStatus)>;
 
     // --- allow named initialization with struct ---
     enum class LogLevel : char {
@@ -41,13 +47,18 @@ public:
     };
     struct Spec {
         std::filesystem::path           appCredentialPath = "./.appCredentials.json";
-        OAuthCallback                   oAuthCallback = {};
+        OAuthUrlRequestCallback         oAuthUrlRequestCallback = {};
+        OAuthCompleteCallback           oAuthCompleteCallback = {};
         std::shared_ptr<spdlog::logger> logger = nullptr;
         LogLevel                        logLevel = LogLevel::Unspecified;
     };
 
                                         Client(const Spec& spec);
                                         ~Client();
+
+    // --- api to set callabcks ---
+    void                                onOAuthUrlRequest(OAuthUrlRequestCallback callback) { m_oAuthUrlRequestCallback = callback; }
+    void                                onOAuthComplete(OAuthCompleteCallback callback) { m_oAuthCompleteCallback = callback; }
 
     // --- streamer api ---
     void                                startStreamer();
@@ -69,16 +80,12 @@ private:
                                              std::shared_ptr<spdlog::logger> logger = nullptr);
 
     // --- OAuth Flow ---
-    enum class TokenStatus : char {
-        Good,
-        Failed,
-    };
     enum class UpdateStatus : char {
         NotRequired,
         Succeeded,
         Failed,
     };
-    TokenStatus                         runOAuth(AuthRequestReason reason, int chances = 3);  // you have 3 chances to run the oauth flow by default
+    AuthStatus                          runOAuth(AuthRequestReason reason, int chances = 3);  // you have 3 chances to run the oauth flow by default
     std::string                         getAuthorizationCode(AuthRequestReason reason, int chances);
     void                                getTokens(const std::string& grantType, const std::string& code, std::string& responseData);
     bool                                writeTokens(AccessTokenResponse response);
@@ -95,6 +102,9 @@ private:
 
     // -- User Preferences
     bool                                requestUserPreferences(std::string& responseData) const;
+
+    // -- Token Checker Daemon's Job ---
+    void                                checkTokensAndReauth();
 
 private:
     // --- active tokens ---
@@ -117,8 +127,9 @@ private:
     // --- streamer ---
     std::unique_ptr<Streamer>           m_streamer;
 
-    // --- oath url request callback ---
-    OAuthCallback                       m_oAuthUrlRequestCallback;
+    // --- callbacks ---
+    OAuthUrlRequestCallback             m_oAuthUrlRequestCallback;
+    OAuthCompleteCallback               m_oAuthCompleteCallback;
 };
 
 } // namespace schwabcpp
