@@ -2,20 +2,18 @@
 #define __CLIENT_H__
 
 #include <string>
-#include <chrono>
 #include <mutex>
 #include <memory>
 #include <filesystem>
 #include "schema/schema.h"
 #include "utils/timer.h"
+#include "utils/clock.h"
 
 namespace spdlog {
 class logger;
 }
 
 namespace schwabcpp {
-
-using clock = std::chrono::system_clock;
 
 class Streamer;
 
@@ -83,7 +81,8 @@ private:
     TokenStatus                         runOAuth(AuthRequestReason reason, int chances = 3);  // you have 3 chances to run the oauth flow by default
     std::string                         getAuthorizationCode(AuthRequestReason reason, int chances);
     void                                getTokens(const std::string& grantType, const std::string& code, std::string& responseData);
-    bool                                writeTokens(const clock::time_point& accessTokenTS, const clock::time_point& refreshTokenTS, const std::string& responseData);
+    bool                                writeTokens(AccessTokenResponse response);
+    bool                                writeTokens(RefreshTokenResponse response);
 
     // loads the token from file, need to check after loading, they migh be expired
     bool                                loadTokens();

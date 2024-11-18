@@ -363,8 +363,7 @@ Client::TokenStatus Client::runOAuth(AuthRequestReason requestReqson, int chance
     getTokens("authorization_code", authorizationCode, responseData);
 
     // Step 3 -- Write the tokens
-    clock::time_point now = clock::now();
-    if (writeTokens(now, now, responseData)) {
+    if (writeTokens(std::move(json::parse(responseData).get<AccessTokenResponse>()))) {
         tokenStatus = TokenStatus::Good;
     }
 
@@ -418,8 +417,7 @@ Client::UpdateStatus Client::updateTokens()
         getTokens("refresh_token", m_refreshToken, responseData);
 
         // save the tokens
-        clock::time_point now = clock::now();
-        if (!writeTokens(now, m_refreshTokenTS, responseData)) {
+        if (!writeTokens(std::move(json::parse(responseData).get<RefreshTokenResponse>()))) {
             status = UpdateStatus::Failed;
         } else {
             status = UpdateStatus::Succeeded;
@@ -434,24 +432,19 @@ Client::UpdateStatus Client::updateTokens()
     return status;
 }
 
-bool Client::writeTokens(const clock::time_point& accessTokenTS, const clock::time_point& refreshTokenTS, const std::string& responseData)
+bool Client::writeTokens(AccessTokenResponse responseData)
 {
     bool result = false;
 
-    if (!responseData.empty()) {
-        // plug in the time stamp
-        json jsonData = json::parse(responseData);
-        jsonData["access_token_ts"] = accessTokenTS.time_since_epoch().count();
-        jsonData["refresh_token_ts"] = refreshTokenTS.time_since_epoch().count();
-
+    if (!responseData.isError) {
         // critical section
         {
             std::lock_guard<std::mutex> guard(m_mutex);
 
-            m_accessToken    = jsonData["access_token"];
-            m_accessTokenTS  = accessTokenTS;
-            m_refreshToken   = jsonData["refresh_token"];
-            m_refreshTokenTS = refreshTokenTS;
+            m_accessToken    = responseData.data.accessToken;
+            m_accessTokenTS  = clock::time_point(clock::duration(responseData.data.accessTokenTS));
+            m_refreshToken   = responseData.data.refreshToken;
+            m_refreshTokenTS = clock::time_point(clock::duration(responseData.data.refreshTokenTS));
         }
 
         // tokens written
@@ -460,14 +453,52 @@ bool Client::writeTokens(const clock::time_point& accessTokenTS, const clock::ti
         // cache the tokens
         std::ofstream tokenCache(tokenCacheFile, std::ofstream::trunc);
         if (tokenCache.is_open()) {
-            tokenCache << jsonData.dump(4);
+            tokenCache << json{responseData}.dump(4);
 
             LOG_DEBUG("Tokens cached to {}.", tokenCacheFile);
         } else {
             LOG_ERROR("Unable to open {} for caching.", tokenCacheFile);
         }
     } else {
-        LOG_ERROR("Token data empty.");
+        LOG_ERROR("Unable to get tokens. Error: {}, {}", responseData.error.error, responseData.error.description);
+    }
+
+    return result;
+}
+
+bool Client::writeTokens(RefreshTokenResponse responseData)
+{
+    bool result = false;
+
+    if (!responseData.isError) {
+        // when writing tokens as the RefreshTokenResponse type, the refresh token timestamp should stay the same
+        // this is the flow where user is requesting new access token with the refresh token
+        responseData.data.refreshTokenTS = m_refreshTokenTS.time_since_epoch().count();
+
+        // critical section
+        {
+            std::lock_guard<std::mutex> guard(m_mutex);
+
+            m_accessToken    = responseData.data.accessToken;
+            m_accessTokenTS  = clock::time_point(clock::duration(responseData.data.accessTokenTS));
+            m_refreshToken   = responseData.data.refreshToken;
+            m_refreshTokenTS = clock::time_point(clock::duration(responseData.data.refreshTokenTS));
+        }
+
+        // tokens written
+        result = true;
+
+        // cache the tokens
+        std::ofstream tokenCache(tokenCacheFile, std::ofstream::trunc);
+        if (tokenCache.is_open()) {
+            tokenCache << json{responseData}.dump(4);
+
+            LOG_DEBUG("Tokens cached to {}.", tokenCacheFile);
+        } else {
+            LOG_ERROR("Unable to open {} for caching.", tokenCacheFile);
+        }
+    } else {
+        LOG_ERROR("Unable to get access token. Error: {}, {}", responseData.error.error, responseData.error.description);
     }
 
     return result;
@@ -510,7 +541,7 @@ void Client::getTokens(const std::string& grantType, const std::string& code, st
             responseData.clear();
             LOG_ERROR("curl_easy_perform(...) failed: {}", curl_easy_strerror(res));
         } else {
-            LOG_TRACE("Response data: {}", responseData);
+            LOG_TRACE("Response data: {}", json::parse(responseData).dump(4));
         }
 
         // cleanup
