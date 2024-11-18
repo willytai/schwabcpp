@@ -47,7 +47,6 @@ void AccessTokenResponse::from_json(const json& j, AccessTokenResponse& self)
         auto start = rawErrorDescription.find_first_of('{');
         auto end = rawErrorDescription.find_last_of('}');
         rawErrorDescription = rawErrorDescription.substr(start, end-start+1);
-        LOG_ERROR("check: {}", rawErrorDescription);
         // parse it and retrieve detailed error_description
         json::parse(rawErrorDescription).at("error_description").get_to(self.error.description);
     } else {

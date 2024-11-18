@@ -5,9 +5,9 @@
 #include <mutex>
 #include <memory>
 #include <filesystem>
-#include "schema/schema.h"
-#include "utils/timer.h"
-#include "utils/clock.h"
+#include "schwabcpp/schema/schema.h"
+#include "schwabcpp/utils/timer.h"
+#include "schwabcpp/utils/clock.h"
 
 namespace spdlog {
 class logger;

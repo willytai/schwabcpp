@@ -26,6 +26,7 @@ find_package(OpenSSL REQUIRED)
 
 include_directories(
     src
+    include
     external/base64/include
     external/spdlog/include
     external/nlohmann_json/include
