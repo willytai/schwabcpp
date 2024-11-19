@@ -267,8 +267,8 @@ AccountsSummaryMap Client::accountSummary()
 
 std::string Client::syncRequest(std::string url, HttpRequestQueries queries)
 {
-
-    std::string response;
+    // initialize to empty
+    std::string response("{}");
 
     // init curl
     CURL* curl = curl_easy_init();
@@ -307,8 +307,8 @@ std::string Client::syncRequest(std::string url, HttpRequestQueries queries)
         // send
         CURLcode res = curl_easy_perform(curl);
         if (res != CURLE_OK) {
-            response.clear();
-            LOG_ERROR("curl_easy_perform(...) failed: {}", curl_easy_strerror(res));
+            response = "{}";
+            LOG_ERROR("In {}, curl_easy_perform(...) failed: {}", __PRETTY_FUNCTION__, curl_easy_strerror(res));
         } else {
             LOG_TRACE("Response data: {}", response);
         }
@@ -535,6 +535,9 @@ void Client::getTokens(const std::string& grantType, const std::string& code, st
     const std::string __redirectUri = "https://127.0.0.1";
     const std::string __base64Credentials = base64::to_base64(m_key + ":" + m_secret);
 
+    // initialize to empty
+    responseData = "{}";
+
     // init curl
     CURL* curl = curl_easy_init();
     if (curl) {
@@ -563,8 +566,8 @@ void Client::getTokens(const std::string& grantType, const std::string& code, st
         // send it
         CURLcode res = curl_easy_perform(curl);
         if (res != CURLE_OK) {
-            responseData.clear();
-            LOG_ERROR("curl_easy_perform(...) failed: {}", curl_easy_strerror(res));
+            responseData = "{}";
+            LOG_ERROR("In {}, curl_easy_perform(...) failed: {}", __PRETTY_FUNCTION__, curl_easy_strerror(res));
         } else {
             LOG_TRACE("Response data: {}", json::parse(responseData).dump(4));
         }
@@ -616,6 +619,9 @@ bool Client::requestUserPreferences(std::string& responseData) const
 
     bool result = false;
 
+    // initialize to empty
+    responseData = "{}";
+
     // init curl
     CURL* curl = curl_easy_init();
     if (curl) {
@@ -638,8 +644,8 @@ bool Client::requestUserPreferences(std::string& responseData) const
         // send
         CURLcode res = curl_easy_perform(curl);
         if (res != CURLE_OK) {
-            responseData.clear();
-            LOG_ERROR("curl_easy_perform(...) failed: {}", curl_easy_strerror(res));
+            responseData = "{}";
+            LOG_ERROR("In {}, curl_easy_perform(...) failed: {}", __PRETTY_FUNCTION__, curl_easy_strerror(res));
         } else {
             result = true;
             LOG_TRACE("Response data: {}", responseData);
