@@ -301,6 +301,7 @@ std::string Client::syncRequest(std::string url, HttpRequestQueries queries)
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
 
         // write callback
+        response.clear();
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
 
@@ -560,6 +561,7 @@ void Client::getTokens(const std::string& grantType, const std::string& code, st
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data.c_str());
 
         // write callback
+        responseData.clear();
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseData);
 
