@@ -389,7 +389,7 @@ Client::AuthStatus Client::runOAuth(AuthRequestReason requestReqson, int chances
     getTokens("authorization_code", authorizationCode, responseData);
 
     // Step 3 -- Write the tokens
-    if (writeTokens(std::move(json::parse(responseData).get<AccessTokenResponse>()))) {
+    if (writeTokens(json::parse(responseData).get<AccessTokenResponse>())) {
         authStatus = AuthStatus::Succeeded;
     }
 
@@ -443,7 +443,7 @@ Client::UpdateStatus Client::updateTokens()
         getTokens("refresh_token", m_refreshToken, responseData);
 
         // save the tokens
-        if (!writeTokens(std::move(json::parse(responseData).get<RefreshTokenResponse>()))) {
+        if (!writeTokens(json::parse(responseData).get<RefreshTokenResponse>())) {
             status = UpdateStatus::Failed;
         } else {
             status = UpdateStatus::Succeeded;
