@@ -4,8 +4,11 @@
 #include <string>
 #include <mutex>
 #include <memory>
-#include <filesystem>
-#include "schwabcpp/schema/schema.h"
+#include "schwabcpp/event/oAuthCompleteEvent.h"
+#include "schwabcpp/event/oAuthUrlRequestEvent.h"
+#include "schwabcpp/schema/accessTokenResponse.h"
+#include "schwabcpp/schema/accountSummary.h"
+#include "schwabcpp/schema/refreshTokenResponse.h"
 #include "schwabcpp/utils/timer.h"
 #include "schwabcpp/utils/clock.h"
 
@@ -19,46 +22,21 @@ class Streamer;
 
 class Client
 {
+    using EventCallbackFn = std::function<void(Event&)>;
+    using AuthStatus = OAuthCompleteEvent::Status;
+    using AuthRequestReason = OAuthUrlRequestEvent::Reason;
 public:
-    // --- allow custom callback when oauth is required ---
-    enum class AuthRequestReason : char {
-        InitialSetup,
-        RefreshTokenExpired,
-        PreviousAuthFailed,
-    };
-    enum class AuthStatus : char {
-        Succeeded,
-        Failed,
-        NotRequired,
-    };
-    // params
-    //   1. the url for the oauth
-    //   2. the reason the request was triggered
-    //   3. the number of chances left to run the oauth if something failed
-    using OAuthUrlRequestCallback = std::function<std::string(const std::string&, AuthRequestReason, int)>;
-    using OAuthCompleteCallback = std::function<void(AuthStatus)>;
-
-    // --- allow named initialization with struct ---
-    enum class LogLevel : char {
-        Debug,
-        Trace,
-
-        Unspecified,
-    };
-    struct Spec {
-        std::filesystem::path           appCredentialPath = "./.appCredentials.json";
-        OAuthUrlRequestCallback         oAuthUrlRequestCallback = {};
-        OAuthCompleteCallback           oAuthCompleteCallback = {};
-        std::shared_ptr<spdlog::logger> logger = nullptr;
-        LogLevel                        logLevel = LogLevel::Unspecified;
-    };
-
-                                        Client(const Spec& spec);
+                                        Client(
+                                            const std::string& key,
+                                            const std::string& secret,
+                                            std::shared_ptr<spdlog::logger> logger
+                                        );
                                         ~Client();
 
-    // --- api to set callabcks ---
-    void                                onOAuthUrlRequest(OAuthUrlRequestCallback callback) { m_oAuthUrlRequestCallback = callback; }
-    void                                onOAuthComplete(OAuthCompleteCallback callback) { m_oAuthCompleteCallback = callback; }
+    bool                                connect();
+
+    // --- api to set custom event callabck ---
+    void                                setEventCallback(EventCallbackFn fn) { m_eventCallback = fn; }
 
     // --- streamer api ---
     void                                startStreamer();
@@ -74,11 +52,6 @@ public:
     std::string                         syncRequest(std::string url, HttpRequestQueries queries = {});  // common helper
 
 private:
-    void                                loadCredentials(const std::filesystem::path& appCredentialPath);
-    void                                init(const std::filesystem::path& appCredentialPath,
-                                             LogLevel level,
-                                             std::shared_ptr<spdlog::logger> logger = nullptr);
-
     // --- OAuth Flow ---
     enum class UpdateStatus : char {
         NotRequired,
@@ -127,9 +100,8 @@ private:
     // --- streamer ---
     std::unique_ptr<Streamer>           m_streamer;
 
-    // --- callbacks ---
-    OAuthUrlRequestCallback             m_oAuthUrlRequestCallback;
-    OAuthCompleteCallback               m_oAuthCompleteCallback;
+    // --- event callback ---
+    EventCallbackFn                     m_eventCallback;
 };
 
 } // namespace schwabcpp

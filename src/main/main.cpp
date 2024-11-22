@@ -5,14 +5,43 @@
 #include "spdlog/sinks/stdout_color_sinks.h"
 #include "spdlog/spdlog.h"
 #include <iostream>
+#include <fstream>
 
 // NOTE: <leader>uf toggles buffer auto foramtting
 
 int main(int argc, char** argv) {
 
-    schwabcpp::Client::LogLevel logLevel(schwabcpp::Client::LogLevel::Debug);
+    using json = nlohmann::json;
+
+    std::string key;
+    std::string secret;
+    std::filesystem::path appCredentialPath("./.appCredentials.json");
+    if (std::filesystem::exists(appCredentialPath)) {
+        std::ifstream file(appCredentialPath);
+        if (file.is_open()) {
+            json credentialData;
+            file >> credentialData;
+
+            if (credentialData.contains("app_key") &&
+                credentialData.contains("app_secret")) {
+                key = credentialData["app_key"];
+                secret = credentialData["app_secret"];
+            } else {
+                std::cerr << "App credentials missing!!" << std::endl;
+                exit(1);
+            }
+        } else {
+            std::cerr << "Unable to open the app credentials file: {}" << appCredentialPath << std::endl;
+            exit(1);
+        }
+    } else {
+        std::cerr << "App credentials file: {} not found. Did you specify the right path?" << appCredentialPath << std::endl;
+        exit(1);
+    }
+
+    spdlog::level::level_enum logLevel(spdlog::level::debug);
     if (argc > 1 && !strcmp(argv[1], "trace")) {
-        logLevel = schwabcpp::Client::LogLevel::Trace;
+        logLevel = spdlog::level::trace;
     }
 
     // custom logger
@@ -24,13 +53,16 @@ int main(int argc, char** argv) {
     auto logger = std::make_shared<spdlog::async_logger>("native discord bot", sinks.begin(), sinks.end(), spdlog::thread_pool(), spdlog::async_overflow_policy::block);
     spdlog::register_logger(logger);
     logger->set_pattern("%^[%Y-%m-%d %X] [%L] %v%$");
-    logger->set_level(spdlog::level::level_enum::debug);
+    logger->set_level(logLevel);
 
     {
-        schwabcpp::Client client({
-            .logger = logger,
-            .logLevel = logLevel,
-        });
+        schwabcpp::Client client(
+            key,
+            secret,
+            logger
+        );
+
+        client.connect();
 
         auto info = client.accountSummary();
 

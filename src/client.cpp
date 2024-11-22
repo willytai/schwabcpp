@@ -25,15 +25,15 @@ size_t writeCallback(void* contents, size_t size, size_t nmemb, std::string* buf
     return totalSize;
 }
 
-std::string defaultOAuthUrlRequestCallback(const std::string& url, Client::AuthRequestReason requestReason, int chances)
+std::string defaultOAuthUrlRequestCallback(OAuthUrlRequestEvent& event)
 {
     // requests the redirected url from terminal
-    switch (requestReason) {
-        case Client::AuthRequestReason::InitialSetup: LOG_INFO("Please authorize to start the schwap client. You have {} chance(s) left.", chances); break;
-        case Client::AuthRequestReason::RefreshTokenExpired: LOG_INFO("Token expired, please reauthorize. You have {} chance(s) left.", chances); break;
-        case Client::AuthRequestReason::PreviousAuthFailed: LOG_ERROR("Previous authorization request failed. The redirected url expires rather fast. Make sure you paste it within 30 seconds. Please reauthorize. You have {} chance(s) left.", chances); break;
+    switch (event.getReason()) {
+        case schwabcpp::OAuthUrlRequestEvent::Reason::InitialSetup: LOG_INFO("Please authorize to start the schwap client. You have {} chance(s) left.", event.getChances()); break;
+        case schwabcpp::OAuthUrlRequestEvent::Reason::RefreshTokenExpired: LOG_INFO("Token expired, please reauthorize. You have {} chance(s) left.", event.getChances()); break;
+        case schwabcpp::OAuthUrlRequestEvent::Reason::PreviousAuthFailed: LOG_ERROR("Previous authorization request failed. The redirected url expires rather fast. Make sure you paste it within 30 seconds. Please reauthorize. You have {} chance(s) left.", event.getChances()); break;
     }
-    LOG_INFO("Go to: {} and login.", url);
+    LOG_INFO("Go to: {} and login.", event.getAuthorizationUrl());
     LOG_INFO("Paste the redirected url here after logging in:");
 
     std::string authorizationRedirectedURL;
@@ -42,63 +42,62 @@ std::string defaultOAuthUrlRequestCallback(const std::string& url, Client::AuthR
     return authorizationRedirectedURL;
 }
 
-void defaultOAuthCompleteCallback(Client::AuthStatus status)
+void defaultOAuthCompleteCallback(OAuthCompleteEvent& event)
 {
-    switch (status) {
-        case Client::AuthStatus::Succeeded: LOG_INFO("OAuth successful."); break;
-        case Client::AuthStatus::Failed: LOG_ERROR("OAuth failed."); break;
-        case Client::AuthStatus::NotRequired: LOG_INFO("OAuth not required."); break;
+    switch (event.getStatus()) {
+        case schwabcpp::OAuthCompleteEvent::Status::Succeeded: LOG_INFO("OAuth successful."); break;
+        case schwabcpp::OAuthCompleteEvent::Status::Failed: LOG_ERROR("OAuth failed."); break;
+        case schwabcpp::OAuthCompleteEvent::Status::NotRequired: LOG_INFO("OAuth not required."); break;
     }
 }
 
 // -- some static variables
 
-static std::string tokenCacheFile = ".tokens.json";
-
-// -- utilities
-
-static spdlog::level::level_enum to_spdlog_log_level(Client::LogLevel level)
-{
-    switch(level) {
-        case Client::LogLevel::Debug: return spdlog::level::debug;
-        case Client::LogLevel::Trace: return spdlog::level::trace;
-        default: return spdlog::level::debug;
-    }
-}
-
+const static std::string tokenCacheFile = ".tokens.json";
 const static std::string s_traderAPIBaseUrl = "https://api.schwabapi.com/trader/v1";
 
 }
 
-Client::Client(const Spec& spec)
+Client::Client(const std::string& key, const std::string& secret, std::shared_ptr<spdlog::logger> logger)
+    : m_key(key)
+    , m_secret(secret)
+    , m_eventCallback({})   // default empty callback
 {
     // create a logger unless one is already provided
-    if (spec.logger) {
-        Logger::setLogger(spec.logger);
-
-        // if log level is also specified, overwite
-        if (spec.logLevel != LogLevel::Unspecified) {
-            Logger::setLogLevel(to_spdlog_log_level(spec.logLevel));
-        }
+    if (logger) {
+        Logger::setLogger(logger);
     } else {
         // logger is not specified, create a default one with the provide log level
         // if log level not specified, defaults to debug
-        Logger::init(to_spdlog_log_level(spec.logLevel));
+        Logger::init(spdlog::level::debug);
     }
-
-    LOG_INFO("Initializing client.");
 
     // we are going to to a bunch of curl, init it here
     curl_global_init(CURL_GLOBAL_DEFAULT);
 
-    loadCredentials(spec.appCredentialPath);
+    LOG_INFO("Schwab client initialized.");
+}
 
-    // set the OAuth callback
-    m_oAuthUrlRequestCallback = spec.oAuthUrlRequestCallback ?
-                                spec.oAuthUrlRequestCallback : defaultOAuthUrlRequestCallback;
-    m_oAuthCompleteCallback = spec.oAuthCompleteCallback ?
-                              spec.oAuthCompleteCallback : defaultOAuthCompleteCallback;
+Client::~Client()
+{
+    LOG_INFO("Stopping client.");
 
+    // reset streamer
+    m_streamer.reset();
+
+    // stop the token checker daemon
+    LOG_TRACE("Shutting down token checker daemon...");
+    m_tokenCheckerDaemon.stop();  // this blocks
+
+    // curl cleanup
+    curl_global_cleanup();
+
+    // now, we relase the logger
+    Logger::releaseLogger();
+}
+
+bool Client::connect()
+{
     // authorization flow starts
     AuthStatus authStatus = AuthStatus::Failed;
 
@@ -122,18 +121,12 @@ Client::Client(const Spec& spec)
         }
     }
 
-    // NOTE: I am not sure if it is safe to trigger the m_oAuthCompleteCallback.
-    //       Consider if someone creates a client and has set a custom oAuthCompleteCallback.
-    //       If that callback tries to call a member function of us, that leads to undefined behavior.
-    //       (calling member functions of unintialized objects)
-    if (m_oAuthCompleteCallback) {
-        m_oAuthCompleteCallback(authStatus);
-    }
-
     if (authStatus == AuthStatus::Succeeded ||
         authStatus == AuthStatus::NotRequired) {
+        LOG_INFO("Schwab client authorized.");
+
         // start the token checker daemon
-        LOG_INFO("Launching token checker daemon.");
+        LOG_DEBUG("Launching token checker daemon...");
         m_tokenCheckerDaemon.start(
             std::chrono::seconds(30),
             std::bind(&Client::checkTokensAndReauth, this)
@@ -141,31 +134,26 @@ Client::Client(const Spec& spec)
 
         // create the streamer
         m_streamer = std::make_unique<Streamer>(this);
-
-        LOG_INFO("Client initialized.");
     } else {
         // TODO: client failed to initialize, should forbid any action on it.
-        LOG_ERROR("Failed to initialize client, please try again later.");
+        LOG_ERROR("Failed to authorize client, please try again later.");
     }
 
-}
+    // create the event object
+    OAuthCompleteEvent event(authStatus);
 
-Client::~Client()
-{
-    LOG_INFO("Stopping client.");
+    // trigger callback
+    if (m_eventCallback) {
+        m_eventCallback(event);
+    }
 
-    // reset streamer
-    m_streamer.reset();
+    // trigger default handler if not handled by the callback
+    if (!event.getHandled()) {
+        defaultOAuthCompleteCallback(event);
+    }
 
-    // stop the token checker daemon
-    LOG_TRACE("Shutting down token checker daemon...");
-    m_tokenCheckerDaemon.stop();  // this blocks
-
-    // curl cleanup
-    curl_global_cleanup();
-
-    // now, we relase the logger
-    Logger::releaseLogger();
+    return authStatus == AuthStatus::Succeeded
+        || authStatus == AuthStatus::NotRequired;
 }
 
 void Client::startStreamer()
@@ -186,29 +174,6 @@ void Client::pauseStreamer()
 void Client::resumeStreamer()
 {
     m_streamer->resume();
-}
-
-void Client::loadCredentials(const std::filesystem::path& appCredentialPath)
-{
-    if (std::filesystem::exists(appCredentialPath)) {
-        std::ifstream file(appCredentialPath);
-        if (file.is_open()) {
-            json credentialData;
-            file >> credentialData;
-
-            if (credentialData.contains("app_key") &&
-                credentialData.contains("app_secret")) {
-                m_key = credentialData["app_key"];
-                m_secret = credentialData["app_secret"];
-            } else {
-                LOG_FATAL("App credentials missing!!");
-            }
-        } else {
-            LOG_FATAL("Unable to open the app credentials file: {}", appCredentialPath.string());
-        }
-    } else {
-        LOG_FATAL("App credentials file: {} not found. Did you specify the right path?", appCredentialPath.string());
-    }
 }
 
 // -- sync api
@@ -588,8 +553,22 @@ std::string Client::getAuthorizationCode(AuthRequestReason reason, int chances)
         "https://api.schwabapi.com/v1/oauth/authorize?client_id=" + m_key +
         "&redirect_uri=https://127.0.0.1";
 
-    // request the redirected url with the callback
-    std::string authorizationRedirectedURL = m_oAuthUrlRequestCallback(authorizationURL, reason, chances);
+    // request the redirected url
+    // create the event object
+    OAuthUrlRequestEvent event(authorizationURL, reason);
+
+    // trigger callback
+    if (m_eventCallback) {
+        m_eventCallback(event);
+    }
+
+    // trigger default handler if not handled by the callback or no reply received
+    std::string authorizationRedirectedURL;
+    if (event.getHandled() && !event.getReply().empty()) {
+        authorizationRedirectedURL = event.getReply();
+    } else {
+        authorizationRedirectedURL = defaultOAuthUrlRequestCallback(event);
+    }
 
     // this should be in the form of https://{APP_CALLBACK_URL}/?code={AUTHORIZATION_CODE}&session={SESSION_ID}
     size_t start = authorizationRedirectedURL.find("?code=");
@@ -666,8 +645,18 @@ void Client::checkTokensAndReauth()
     // call updateTokens, rerun oauth if failed
     if (updateTokens() == UpdateStatus::Failed) {
         AuthStatus status = runOAuth(AuthRequestReason::RefreshTokenExpired);
-        if (m_oAuthCompleteCallback) {
-            m_oAuthCompleteCallback(status);
+
+        // create the event object
+        OAuthCompleteEvent event(status);
+
+        // trigger callback
+        if (m_eventCallback) {
+            m_eventCallback(event);
+        }
+
+        // trigger default handler if not handled by the callback
+        if (!event.getHandled()) {
+            defaultOAuthCompleteCallback(event);
         }
     }
 }
