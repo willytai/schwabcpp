@@ -1,6 +1,7 @@
 #ifndef __EVENT_BASE_H__
 #define __EVENT_BASE_H__
 
+#include <functional>
 #include <string>
 
 namespace schwabcpp {
@@ -13,7 +14,6 @@ enum class EventType
 
 class Event
 {
-    friend class Client;
 public:
     Event() = default;
 
@@ -22,7 +22,6 @@ public:
     virtual std::string toString() const { return this->name(); }
 
     inline bool getHandled() const { return m_handled; }
-    inline void setHandled(bool b) { m_handled = b; }
 
     // some events accepts reply
     inline void reply(const std::string& s) { m_reply = s; }
@@ -33,10 +32,12 @@ public:
     }
 
 private:
+    friend class Client;
     std::string m_reply = "";
     const std::string& getReply() const { return m_reply; }
 
 private:
+    friend class EventDispatcher;
     bool m_handled = false;
 };
 
@@ -44,6 +45,27 @@ private:
     static EventType StaticType() { return EventType::EventName; } \
     EventType type() const override { return StaticType(); } \
     const char* name() const override { return #EventName; }
+
+
+class EventDispatcher
+{
+    template <typename T>
+    using eventFn = std::function<bool(T&)>;
+public:
+    EventDispatcher(Event& event) : m_event(event) {}
+
+    template <typename T>
+    bool dispatch(eventFn<T> fn) {
+        if (m_event.type() == T::StaticType()) {
+            m_event.m_handled = fn(*(T*)&m_event);
+            return true;
+        }
+        return false;
+    }
+
+private:
+    Event& m_event;
+};
 
 } // namespace schwabcpp
 
