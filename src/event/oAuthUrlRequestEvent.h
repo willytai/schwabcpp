@@ -16,8 +16,10 @@ public:
         PreviousAuthFailed,
     };
 
-                                  OAuthUrlRequestEvent(const std::string oAuthUrl, Reason reason)
+                                  OAuthUrlRequestEvent(const std::string oAuthUrl, Reason reason, int chances)
                                       : m_oAuthUrl(oAuthUrl)
+                                      , m_reason(reason)
+                                      , m_chances(chances)
                                   {}
 
     virtual                       ~OAuthUrlRequestEvent() {}

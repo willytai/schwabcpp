@@ -555,7 +555,7 @@ std::string Client::getAuthorizationCode(AuthRequestReason reason, int chances)
 
     // request the redirected url
     // create the event object
-    OAuthUrlRequestEvent event(authorizationURL, reason);
+    OAuthUrlRequestEvent event(authorizationURL, reason, chances);
 
     // trigger callback
     if (m_eventCallback) {
