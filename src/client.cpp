@@ -683,7 +683,7 @@ void Client::checkTokensAndReauth()
         }
 
         case UpdateStatus::NotRequired: {
-            LOG_TRACE("Tokens update not required.");
+            // LOG_TRACE("Tokens update not required.");  // too annoying
             break;
         }
 
