@@ -56,7 +56,8 @@ private:
     enum class UpdateStatus : char {
         NotRequired,
         Succeeded,
-        Failed,
+        FailedExpired,
+        FailedBadData,
     };
     AuthStatus                          runOAuth(AuthRequestReason reason, int chances = 3);  // you have 3 chances to run the oauth flow by default
     std::string                         getAuthorizationCode(AuthRequestReason reason, int chances);

@@ -108,16 +108,27 @@ bool Client::connect()
     } else {
         // loaded cached tokens, check if update required
         UpdateStatus updateStatus = updateTokens();
-        if (updateStatus == UpdateStatus::Failed) {
-            // this means tokens are loaded but refresh token expired, cannot update
-            // need to reauthorize
-            authStatus = runOAuth(AuthRequestReason::RefreshTokenExpired);
-        } else if (updateStatus == UpdateStatus::NotRequired) {
-            authStatus = AuthStatus::NotRequired;
-        } else if (updateStatus == UpdateStatus::Succeeded) {
-            authStatus = AuthStatus::Succeeded;
-        } else {
-            LOG_ERROR("Unrecognized UpdateStatus. Fix this!!");
+        switch (updateStatus) {
+            case UpdateStatus::NotRequired: {
+                authStatus = AuthStatus::NotRequired;
+                break;
+            }
+            case UpdateStatus::Succeeded: {
+                authStatus = AuthStatus::Succeeded;
+                break;
+            }
+            case UpdateStatus::FailedExpired: {
+                // this means tokens are loaded but refresh token expired, cannot update
+                // need to reauthorize
+                authStatus = runOAuth(AuthRequestReason::RefreshTokenExpired);
+                break;
+            }
+            case UpdateStatus::FailedBadData: {
+                // TODO: figure out what to do here
+                break;
+            }
+
+            default: LOG_ERROR("Unrecognized UpdateStatus. Fix this!!"); break;
         }
     }
 
@@ -390,7 +401,7 @@ Client::UpdateStatus Client::updateTokens()
     clock::duration refreshTokenValidTime = (__refresh_token_timeout - (clock::now() - m_refreshTokenTS));
     if (refreshTokenValidTime < __refresh_token_update_threshold) {
         LOG_WARN("Refresh token expired, please reauthorize.");
-        return UpdateStatus::Failed;
+        return UpdateStatus::FailedExpired;
     }
 
     // check if we need to update access token
@@ -409,7 +420,7 @@ Client::UpdateStatus Client::updateTokens()
 
         // save the tokens
         if (!writeTokens(json::parse(responseData).get<RefreshTokenResponse>())) {
-            status = UpdateStatus::Failed;
+            status = UpdateStatus::FailedBadData;
         } else {
             status = UpdateStatus::Succeeded;
 
@@ -642,21 +653,43 @@ bool Client::requestUserPreferences(std::string& responseData) const
 
 void Client::checkTokensAndReauth()
 {
-    // call updateTokens, rerun oauth if failed
-    if (updateTokens() == UpdateStatus::Failed) {
-        AuthStatus status = runOAuth(AuthRequestReason::RefreshTokenExpired);
+    // call updateTokens, rerun oauth if failed because expired
+    // if failed because of bad data, we'll do nothing and let this function get triggered
+    // again sometime later
+    switch (updateTokens()) {
 
-        // create the event object
-        OAuthCompleteEvent event(status);
+        case UpdateStatus::FailedExpired: {
+            AuthStatus status = runOAuth(AuthRequestReason::RefreshTokenExpired);
 
-        // trigger callback
-        if (m_eventCallback) {
-            m_eventCallback(event);
+            // create the event object
+            OAuthCompleteEvent event(status);
+
+            // trigger callback
+            if (m_eventCallback) {
+                m_eventCallback(event);
+            }
+
+            // trigger default handler if not handled by the callback
+            if (!event.getHandled()) {
+                defaultOAuthCompleteCallback(event);
+            }
+
+            break;
         }
 
-        // trigger default handler if not handled by the callback
-        if (!event.getHandled()) {
-            defaultOAuthCompleteCallback(event);
+        case UpdateStatus::FailedBadData: {
+            LOG_WARN("Failed to update tokens due to corrupted data. Will run the update again later. (Check your internet connection)");
+            break;
+        }
+
+        case UpdateStatus::NotRequired: {
+            LOG_TRACE("Tokens update not required.");
+            break;
+        }
+
+        case UpdateStatus::Succeeded: {
+            LOG_INFO("Successfuly updated tokens.");
+            break;
         }
     }
 }
