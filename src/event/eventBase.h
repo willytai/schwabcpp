@@ -22,6 +22,7 @@ public:
     virtual std::string toString() const { return this->name(); }
 
     inline bool getHandled() const { return m_handled; }
+    void setHandled(bool b) { m_handled = b; }
 
     // some events accepts reply
     inline void reply(const std::string& s) { m_reply = s; }
