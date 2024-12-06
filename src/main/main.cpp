@@ -64,12 +64,12 @@ int main(int argc, char** argv) {
 
         client.connect();
 
-        auto info = client.accountSummary();
+        auto info = client.accountSummary(client.getLinkedAccounts().back());
 
-        std::cout << info.summary["49339068"].aggregatedBalance.liquidationValue << std::endl;
-        std::cout << info.summary["49339068"].aggregatedBalance.currentLiquidationValue << std::endl;
-        std::cout << info.summary["49339068"].securitiesAccount.currentBalances.unsettledCash << std::endl;
-        std::cout << info.summary["49339068"].securitiesAccount.isDayTrader << std::endl;
+        std::cout << info.aggregatedBalance.liquidationValue << std::endl;
+        std::cout << info.aggregatedBalance.currentLiquidationValue << std::endl;
+        std::cout << info.securitiesAccount.currentBalances.unsettledCash << std::endl;
+        std::cout << info.securitiesAccount.isDayTrader << std::endl;
 
         // std::cout << info.dump() << std::endl;
 

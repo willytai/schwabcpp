@@ -163,8 +163,25 @@ bool Client::connect()
         defaultOAuthCompleteCallback(event);
     }
 
-    return authStatus == AuthStatus::Succeeded
-        || authStatus == AuthStatus::NotRequired;
+    bool result = authStatus == AuthStatus::Succeeded
+               || authStatus == AuthStatus::NotRequired;
+
+    if (result) {
+        // cache linked accounts info as this does not change after authorization
+        std::string url = s_traderAPIBaseUrl + "/accounts/accountNumbers";
+        std::vector<json> accountNumbersData = json::parse(syncRequest(url));
+        try {
+            for (const auto& data : accountNumbersData) {
+                m_linkedAccounts[data.at("accountNumber")] = data.at("hashValue");
+            }
+
+            LOG_INFO("Linked accounts info cached.");
+        } catch (...) {
+            // TODO:
+        }
+    }
+
+    return result;
 }
 
 void Client::startStreamer()
@@ -192,20 +209,9 @@ AccountSummary Client::accountSummary(const std::string& accountNumber)
 {
     std::string finalUrl = s_traderAPIBaseUrl + "/accounts";
 
-    // first, get the hash value for the account number
-    if (!accountNumber.empty()) {
-        std::string url = s_traderAPIBaseUrl + "/accounts/accountNumbers";
-        std::vector<json> accountNumbersData = json::parse(syncRequest(url));
-        // find the hash
-        std::string accountHash;
-        for (const auto& data : accountNumbersData) {
-            if (data.at("accountNumber") == accountNumber) {
-                accountHash = data.at("hashValue");
-                break;
-            }
-        }
-        // embed
-        finalUrl += "/" + accountHash;
+    // embed
+    if (m_linkedAccounts.contains(accountNumber)) {
+        finalUrl += "/" + m_linkedAccounts[accountNumber];
     }
 
     HttpRequestQueries queries = {
@@ -296,6 +302,16 @@ std::string Client::syncRequest(std::string url, HttpRequestQueries queries)
     }
 
     return response;
+}
+
+std::vector<std::string>
+Client::getLinkedAccounts() const
+{
+    std::vector<std::string> result;
+    for (const auto& [key, _] : m_linkedAccounts) {
+        result.push_back(key);
+    }
+    return std::move(result);
 }
 
 // -- OAuth Flow

@@ -51,6 +51,9 @@ public:
     AccountsSummaryMap                  accountSummary();
     std::string                         syncRequest(std::string url, HttpRequestQueries queries = {});  // common helper
 
+    // --- getters to cached data
+    std::vector<std::string>            getLinkedAccounts() const;
+
 private:
     // --- OAuth Flow ---
     enum class UpdateStatus : char {
@@ -103,6 +106,10 @@ private:
 
     // --- event callback ---
     EventCallbackFn                     m_eventCallback;
+
+    // --- linked accounts ---
+    std::unordered_map<std::string, std::string>
+                                        m_linkedAccounts;
 };
 
 } // namespace schwabcpp
