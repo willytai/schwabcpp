@@ -26,7 +26,7 @@ Streamer::Streamer(Client* client)
     // get the streamer info
     try {
         m_streamerInfo = m_client->getUserPreference().streamerInfo.front();
-        LOG_INFO("Streamer info copied");
+        LOG_INFO("Streamer info copied.");
     } catch (...) {
         LOG_ERROR("Failed to retrieve streamer info.");
     }

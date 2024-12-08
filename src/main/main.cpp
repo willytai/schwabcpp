@@ -73,9 +73,7 @@ int main(int argc, char** argv) {
 
         // std::cout << info.dump() << std::endl;
 
-        client.startStreamer();
-
-        std::this_thread::sleep_for(std::chrono::seconds(5));
+        // std::this_thread::sleep_for(std::chrono::seconds(5));
 
         client.subscribeLevelOneEquities(
             {
@@ -89,6 +87,8 @@ int main(int argc, char** argv) {
                 schwabcpp::StreamerField::LevelOneEquity::ClosePrice,
             }
         );
+
+        client.startStreamer();
 
         // TEST: testing pause resume
         {
