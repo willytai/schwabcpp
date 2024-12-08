@@ -13,12 +13,12 @@ struct AccessTokenResponse {
     union {
 
         struct {
-            int         expiresIn;
             std::string tokenType;
             std::string scope;
             std::string refreshToken;
             std::string accessToken;
             std::string idToken;
+            int         expiresIn;
 
             // some other data that I want to keep
             clock::rep  refreshTokenTS;
