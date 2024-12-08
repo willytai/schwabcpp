@@ -3,6 +3,7 @@
 
 #include <unordered_map>
 #include "websocket.h"
+#include "schema/userPreference.h"
 
 namespace schwabcpp {
 
@@ -30,9 +31,6 @@ class Client;
 //
 class Streamer
 {
-private:
-    enum class StreamerInfoKey;
-
 public:
     enum class RequestServiceType : char;
     static std::string requestServiceType2String(RequestServiceType type);
@@ -93,7 +91,7 @@ private:
     Client*                     m_client;  // since the client "owns" the streamer, this is always valid
     std::unique_ptr<Websocket>  m_websocket;                  
 
-    std::unordered_map<StreamerInfoKey, std::string>
+    UserPreference::StreamerInfo
                                 m_streamerInfo;
     size_t                      m_requestId;
 

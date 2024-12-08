@@ -15,72 +15,20 @@ auto defaultStreamerDataHandler = [](const std::string& data) {
     }
 };
 
-enum class Streamer::StreamerInfoKey {
-    SocketURL = 0,
-    CustomerId = 1,
-    CorrelId = 2,
-    Channel = 3,
-    FunctionId = 4,
-};
-
 Streamer::Streamer(Client* client)
     : m_client(client)
     , m_requestId(0)
     , m_dataHandler(defaultStreamerDataHandler)
     , m_state(CVState::Inactive)
 {
-    LOG_INFO("Initializing streamer.");
+    LOG_INFO("Initializing streamer...");
 
-    // get the user preference
-    LOG_DEBUG("Requesting user preference.");
-    std::string response;
-    if (client->requestUserPreferences(response)) {
-        json jsonData = json::parse(response);
-
-        // extract the streamer info
-        if (jsonData.contains("streamerInfo") &&
-            jsonData["streamerInfo"].is_array()) {
-            json streamerInfoData = jsonData["streamerInfo"].get<std::vector<json>>().at(0);
-
-            // populate the feilds
-            if (streamerInfoData.contains("streamerSocketUrl")) {
-                m_streamerInfo[StreamerInfoKey::SocketURL] = streamerInfoData["streamerSocketUrl"];
-            }
-            if (streamerInfoData.contains("schwabClientCustomerId")) {
-                m_streamerInfo[StreamerInfoKey::CustomerId] = streamerInfoData["schwabClientCustomerId"];
-            }
-            if (streamerInfoData.contains("schwabClientCorrelId")) {
-                m_streamerInfo[StreamerInfoKey::CorrelId] = streamerInfoData["schwabClientCorrelId"];
-            }
-            if (streamerInfoData.contains("schwabClientChannel")) {
-                m_streamerInfo[StreamerInfoKey::Channel] = streamerInfoData["schwabClientChannel"];
-            }
-            if (streamerInfoData.contains("schwabClientFunctionId")) {
-                m_streamerInfo[StreamerInfoKey::FunctionId] = streamerInfoData["schwabClientFunctionId"];
-            }
-
-            // let's verify all info set
-            static const std::array<StreamerInfoKey, 5> __requiredInfo = {
-                StreamerInfoKey::SocketURL,
-                StreamerInfoKey::CustomerId,
-                StreamerInfoKey::CorrelId,
-                StreamerInfoKey::Channel,
-                StreamerInfoKey::FunctionId,
-            };
-            bool streamerInfoIncomplete = false;
-            for (const auto& key : __requiredInfo) {
-                if (!m_streamerInfo.contains(key)) {
-                    streamerInfoIncomplete = true;
-                    break;
-                }
-            }
-
-            if (!streamerInfoIncomplete) {
-                LOG_INFO("Streamer info updated.");
-            } else {
-                LOG_ERROR("Streamer info incomplete.");
-            }
-        }
+    // get the streamer info
+    try {
+        m_streamerInfo = m_client->getUserPreference().streamerInfo.front();
+        LOG_INFO("Streamer info copied");
+    } catch (...) {
+        LOG_ERROR("Failed to retrieve streamer info.");
     }
 }
 
@@ -99,7 +47,7 @@ void Streamer::start()
     LOG_INFO("Starting streamer...");
 
     // create the websocket
-    m_websocket = std::make_unique<Websocket>(m_streamerInfo[StreamerInfoKey::SocketURL]);
+    m_websocket = std::make_unique<Websocket>(m_streamerInfo.streamerSocketUrl);
     // connect and login
     m_websocket->asyncConnect(std::bind(&Streamer::onWebsocketConnected, this));
 
@@ -170,8 +118,8 @@ void Streamer::onWebsocketConnected()
         RequestCommandType::LOGIN,
         {
             { "Authorization", m_client->getAccessToken() },
-            { "SchwabClientChannel", m_streamerInfo[StreamerInfoKey::Channel] },
-            { "SchwabClientFunctionId", m_streamerInfo[StreamerInfoKey::FunctionId] },
+            { "SchwabClientChannel", m_streamerInfo.schwabClientChannel },
+            { "SchwabClientFunctionId", m_streamerInfo.schwabClientFunctionId },
         }
     );
 
@@ -370,8 +318,8 @@ std::string Streamer::constructStreamRequest(
     requestJson["service"] = requestServiceType2String(service);
     requestJson["command"] = requestCommandType2String(command);
     requestJson["requestid"] = m_requestId++;
-    requestJson["SchwabClientCustomerId"] = m_streamerInfo[StreamerInfoKey::CustomerId];
-    requestJson["SchwabClientCorrelId"] = m_streamerInfo[StreamerInfoKey::CorrelId];
+    requestJson["SchwabClientCustomerId"] = m_streamerInfo.schwabClientCustomerId;
+    requestJson["SchwabClientCorrelId"] = m_streamerInfo.schwabClientCorrelId;
 
     if (!parameters.empty()) {
         requestJson["parameters"] = parameters;

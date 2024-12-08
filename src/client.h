@@ -10,6 +10,7 @@
 #include "schwabcpp/schema/accessTokenResponse.h"
 #include "schwabcpp/schema/accountSummary.h"
 #include "schwabcpp/schema/refreshTokenResponse.h"
+#include "schwabcpp/schema/userPreference.h"
 #include "schwabcpp/utils/timer.h"
 #include "schwabcpp/utils/clock.h"
 
@@ -58,8 +59,10 @@ public:
     void                                subscribeLevelOneEquities(const std::vector<std::string>& tickers,
                                                                   const std::vector<StreamerField::LevelOneEquity>& fields);
 
-    // --- getters to cached data
+    // --- getters to cached data, available if connection established
+    //     (These are not protected by mutex, but they don't change after being set so they should be thread safe)
     std::vector<std::string>            getLinkedAccounts() const;
+    const UserPreference&               getUserPreference() const { return m_userPreference; }
 
 private:
     // --- OAuth Flow ---
@@ -80,12 +83,9 @@ private:
     // updates the token
     UpdateStatus                        updateTokens();
 
-    // --- Token Access for Streamer Class (Thread-Safe) ---
+    // --- Accessors for Streamer Class (Thread-Safe) ---
     friend class Streamer;
     std::string                         getAccessToken() const;
-
-    // -- User Preferences
-    bool                                requestUserPreferences(std::string& responseData) const;
 
     // -- Token Checker Daemon's Job ---
     void                                checkTokensAndReauth();
@@ -114,7 +114,8 @@ private:
     // --- event callback ---
     EventCallbackFn                     m_eventCallback;
 
-    // --- linked accounts ---
+    // --- cached data ---
+    UserPreference                      m_userPreference;
     std::unordered_map<std::string, std::string>
                                         m_linkedAccounts;
 };

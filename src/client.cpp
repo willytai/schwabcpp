@@ -132,9 +132,38 @@ bool Client::connect()
         }
     }
 
-    if (authStatus == AuthStatus::Succeeded ||
-        authStatus == AuthStatus::NotRequired) {
+    bool result = authStatus == AuthStatus::Succeeded
+               || authStatus == AuthStatus::NotRequired;
+
+    if (result) {
         LOG_INFO("Schwab client authorized.");
+
+        // cache linked accounts info as this does not change after authorization
+        {
+            std::string url = s_traderAPIBaseUrl + "/accounts/accountNumbers";
+            std::vector<json> accountNumbersData = json::parse(syncRequest(url));
+            try {
+                for (const auto& data : accountNumbersData) {
+                    m_linkedAccounts[data.at("accountNumber")] = data.at("hashValue");
+                }
+
+                LOG_INFO("Linked accounts info cached.");
+            } catch (...) {
+                // TODO:
+            }
+        }
+
+        // also cache user preference
+        {
+            std::string url = s_traderAPIBaseUrl + "/userPreference";
+            try {
+                json::parse(syncRequest(url)).get_to(m_userPreference);
+
+                LOG_INFO("User preference cached.");
+            } catch (...) {
+                // TODO:
+            }
+        }
 
         // start the token checker daemon
         LOG_DEBUG("Launching token checker daemon...");
@@ -143,7 +172,7 @@ bool Client::connect()
             std::bind(&Client::checkTokensAndReauth, this)
         );
 
-        // create the streamer
+        // create the streamer (do this last so that the user preference is ready to use)
         m_streamer = std::make_unique<Streamer>(this);
     } else {
         // TODO: client failed to initialize, should forbid any action on it.
@@ -161,24 +190,6 @@ bool Client::connect()
     // trigger default handler if not handled by the callback
     if (!event.getHandled()) {
         defaultOAuthCompleteCallback(event);
-    }
-
-    bool result = authStatus == AuthStatus::Succeeded
-               || authStatus == AuthStatus::NotRequired;
-
-    if (result) {
-        // cache linked accounts info as this does not change after authorization
-        std::string url = s_traderAPIBaseUrl + "/accounts/accountNumbers";
-        std::vector<json> accountNumbersData = json::parse(syncRequest(url));
-        try {
-            for (const auto& data : accountNumbersData) {
-                m_linkedAccounts[data.at("accountNumber")] = data.at("hashValue");
-            }
-
-            LOG_INFO("Linked accounts info cached.");
-        } catch (...) {
-            // TODO:
-        }
     }
 
     return result;
@@ -664,57 +675,11 @@ std::string Client::getAuthorizationCode(AuthRequestReason reason, int chances)
     return result;
 }
 
-// -- Thread Safe Token Access
+// -- Thread Safe Accessors
 std::string Client::getAccessToken() const
 {
     std::lock_guard<std::mutex> guard(m_mutex);
     return m_accessToken;
-}
-
-bool Client::requestUserPreferences(std::string& responseData) const
-{
-    const std::string __preferenceURL = s_traderAPIBaseUrl + "/userPreference";
-
-    bool result = false;
-
-    // initialize to empty
-    responseData = "{}";
-
-    // init curl
-    CURL* curl = curl_easy_init();
-    if (curl) {
-        // set the url for the request
-        curl_easy_setopt(curl, CURLOPT_URL, __preferenceURL.c_str());
-
-        // header
-        struct curl_slist* headers = NULL;
-        headers = curl_slist_append(headers, ("Authorization: Bearer " + getAccessToken()).c_str());
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-
-        // 5 seconds timeout
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
-
-        // write callback
-        responseData.clear();
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseData);
-
-        // send
-        CURLcode res = curl_easy_perform(curl);
-        if (res != CURLE_OK) {
-            responseData = "{}";
-            LOG_ERROR("In {}, curl_easy_perform(...) failed: {}", __PRETTY_FUNCTION__, curl_easy_strerror(res));
-        } else {
-            result = true;
-            LOG_TRACE("Response data: {}", responseData);
-        }
-
-        // cleanup
-        curl_slist_free_all(headers);
-        curl_easy_cleanup(curl);
-    }
-
-    return result;
 }
 
 void Client::checkTokensAndReauth()
