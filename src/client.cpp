@@ -80,7 +80,7 @@ Client::Client(const std::string& key, const std::string& secret, std::shared_pt
 
 Client::~Client()
 {
-    LOG_INFO("Stopping client.");
+    LOG_INFO("Stopping client...");
 
     // reset streamer
     m_streamer.reset();
@@ -204,6 +204,11 @@ void Client::resumeStreamer()
     m_streamer->resume();
 }
 
+void Client::setStreamerDataHandler(std::function<void(const std::string&)> handler)
+{
+    m_streamer->setDataHandler(handler);
+}
+
 // -- sync api
 AccountSummary Client::accountSummary(const std::string& accountNumber)
 {
@@ -302,6 +307,51 @@ std::string Client::syncRequest(std::string url, HttpRequestQueries queries)
     }
 
     return response;
+}
+
+// async api (mostly for interacting with the streamer)
+void Client::subscribeLevelOneEquities(const std::vector<std::string>& tickers,
+                                       const std::vector<StreamerField::LevelOneEquity>& fields)
+{
+    // NOTE: Assumes that the streamer has started, (OK if paused)
+    if (m_streamer->isActive() || m_streamer->isPaused()) {
+        // NOTE: The streamer requires the symbol field to exist.
+        //       It also requires the fields to be sorted in ascending order.
+        //       Another thing to note is that the streamer does not support overwriting the existing subscribed fields.
+        //       If you try to add a new subscription with different fields of the same service type, they would not go through.
+        //       You will only get data of the old subscribed fields.
+        //       To add or change new fields to the streamer, you have to do a complete new subscription for all the tickers.
+        //       (What a trash API...)
+        std::vector<StreamerField::LevelOneEquity>& tmp = const_cast<std::vector<StreamerField::LevelOneEquity>&>(fields);
+        std::sort(tmp.begin(), tmp.end(), [](StreamerField::LevelOneEquity left, StreamerField::LevelOneEquity right) {
+            return left < right;
+        });
+        if (tmp.front() != StreamerField::LevelOneEquity::Symbol) {
+            tmp.insert(tmp.begin(), StreamerField::LevelOneEquity::Symbol);
+        }
+        m_streamer->asyncRequest(
+            m_streamer->constructStreamRequest(
+                Streamer::RequestServiceType::LEVELONE_EQUITIES,
+                Streamer::RequestCommandType::ADD,
+                {
+                    { "keys", std::accumulate(tickers.begin(), tickers.end(), std::string(), [](std::string acc, const std::string& val) {
+                        if (!acc.empty()) {
+                            acc += ",";
+                        }
+                        return acc + val;
+                    }) },
+                    { "fields", std::accumulate(fields.begin(), fields.end(), std::string(), [](std::string acc, const StreamerField::LevelOneEquity val) {
+                        if (!acc.empty()) {
+                            acc += ",";
+                        }
+                        return acc + std::to_string(static_cast<int>(val));
+                    }) },
+                }
+            )
+        );
+    } else {
+        LOG_ERROR("Start the streamer before requesting subscriptions.");
+    }
 }
 
 std::vector<std::string>

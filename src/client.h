@@ -4,6 +4,7 @@
 #include <string>
 #include <mutex>
 #include <memory>
+#include "schwabcpp/streamerField.h"
 #include "schwabcpp/event/oAuthCompleteEvent.h"
 #include "schwabcpp/event/oAuthUrlRequestEvent.h"
 #include "schwabcpp/schema/accessTokenResponse.h"
@@ -45,11 +46,17 @@ public:
     void                                pauseStreamer();
     void                                resumeStreamer();
 
+    void                                setStreamerDataHandler(std::function<void(const std::string&)> handler);
+
     // --- sync api --- (returns string response, user is responsible of parsing)
     using HttpRequestQueries = std::unordered_map<std::string, std::string>;
     AccountSummary                      accountSummary(const std::string& accountNumber);
     AccountsSummaryMap                  accountSummary();
     std::string                         syncRequest(std::string url, HttpRequestQueries queries = {});  // common helper
+
+    // --- async api --- (mostly for interacting with the streamer)
+    void                                subscribeLevelOneEquities(const std::vector<std::string>& tickers,
+                                                                  const std::vector<StreamerField::LevelOneEquity>& fields);
 
     // --- getters to cached data
     std::vector<std::string>            getLinkedAccounts() const;

@@ -30,29 +30,14 @@ class Client;
 //
 class Streamer
 {
-    enum class StreamerInfoKey {
-        SocketURL = 0,
-        CustomerId = 1,
-        CorrelId = 2,
-        Channel = 3,
-        FunctionId = 4,
-    };
+private:
+    enum class StreamerInfoKey;
 
-    enum class RequestServiceType : char {
-        ADMIN,
-        LEVELONE_EQUITIES,
-        NYSE_BOOK,
-        NASDAQ_BOOK,
-        OPTIONS_BOOK,
-    };
+public:
+    enum class RequestServiceType : char;
     static std::string requestServiceType2String(RequestServiceType type);
 
-    enum class RequestCommandType : char {
-        LOGIN,
-        LOGOUT,
-        SUBS,
-        ADD,
-    };
+    enum class RequestCommandType : char;
     static std::string requestCommandType2String(RequestCommandType type);
 
     using RequestParametersType = std::unordered_map<std::string, std::string>;
@@ -74,9 +59,10 @@ public:
     bool                        isActive() const;
     bool                        isPaused() const;
 
+    void                        setDataHandler(std::function<void(const std::string&)> handler) { m_dataHandler = handler; }
+
     void                        asyncRequest(const std::string& request, std::function<void()> callback = {});
 
-private:
     std::string                 constructStreamRequest(
                                     RequestServiceType service,
                                     RequestCommandType command,
@@ -110,6 +96,9 @@ private:
     std::unordered_map<StreamerInfoKey, std::string>
                                 m_streamerInfo;
     size_t                      m_requestId;
+
+    std::function<void(const std::string&)>
+                                m_dataHandler;
 
     // -- request queue and sender control
     class CVState {
@@ -150,6 +139,22 @@ private:
         std::function<void()> callback;
     };
     std::queue<RequestData>     m_requestQueue;
+};
+
+// definitions of the public enums
+enum class Streamer::RequestServiceType : char {
+    ADMIN,
+    LEVELONE_EQUITIES,
+    NYSE_BOOK,
+    NASDAQ_BOOK,
+    OPTIONS_BOOK,
+};
+
+enum class Streamer::RequestCommandType : char {
+    LOGIN,
+    LOGOUT,
+    SUBS,
+    ADD,
 };
 
 }

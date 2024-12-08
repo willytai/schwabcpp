@@ -7,7 +7,7 @@ namespace schwabcpp {
 
 using json = nlohmann::json;
 
-auto __streamerDataHandlerPlaceholder = [](const std::string& data) {
+auto defaultStreamerDataHandler = [](const std::string& data) {
     try {
         LOG_INFO("Data: \n{}", data.empty() ? "" : json::parse(data).dump(4));
     } catch (...) {
@@ -15,9 +15,18 @@ auto __streamerDataHandlerPlaceholder = [](const std::string& data) {
     }
 };
 
+enum class Streamer::StreamerInfoKey {
+    SocketURL = 0,
+    CustomerId = 1,
+    CorrelId = 2,
+    Channel = 3,
+    FunctionId = 4,
+};
+
 Streamer::Streamer(Client* client)
     : m_client(client)
     , m_requestId(0)
+    , m_dataHandler(defaultStreamerDataHandler)
     , m_state(CVState::Inactive)
 {
     LOG_INFO("Initializing streamer.");
@@ -87,7 +96,7 @@ Streamer::~Streamer()
 
 void Streamer::start()
 {
-    LOG_INFO("Starting streamer.");
+    LOG_INFO("Starting streamer...");
 
     // create the websocket
     m_websocket = std::make_unique<Websocket>(m_streamerInfo[StreamerInfoKey::SocketURL]);
@@ -145,7 +154,7 @@ void Streamer::start()
         // )
     );
     // asyncRequest(testSubRequest1);
-    asyncRequest(testSubRequest2);
+    // asyncRequest(testSubRequest2);
 }
 
 void Streamer::onWebsocketConnected()
@@ -206,10 +215,7 @@ void Streamer::onWebsocketConnected()
                                 }
 
                                 // now that we're logged in, start the receiver loop
-                                m_websocket->startReceiverLoop(
-                                    // TODO: this is where the stream data handler should go
-                                    __streamerDataHandlerPlaceholder
-                                );
+                                m_websocket->startReceiverLoop(m_dataHandler);
                             }
                         }
                     }
@@ -271,10 +277,7 @@ void Streamer::resume()
         lock.unlock();
 
         // start the receiver loop
-        m_websocket->startReceiverLoop(
-            // TODO: this is where the stream data handler should go
-            __streamerDataHandlerPlaceholder
-        );
+        m_websocket->startReceiverLoop(m_dataHandler);
 
         // change state and notify sender
         lock.lock();
