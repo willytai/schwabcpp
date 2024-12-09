@@ -350,6 +350,8 @@ std::string Streamer::requestServiceType2String(RequestServiceType type)
         case RequestServiceType::NASDAQ_BOOK:       return "NASDAQ_BOOK";
         case RequestServiceType::OPTIONS_BOOK:      return "OPTIONS_BOOK";
     }
+
+    return "";
 }
 
 std::string Streamer::requestCommandType2String(RequestCommandType type)
@@ -360,6 +362,8 @@ std::string Streamer::requestCommandType2String(RequestCommandType type)
         case RequestCommandType::SUBS:   return "SUBS";
         case RequestCommandType::ADD:    return "ADD";
     }
+
+    return "";
 }
 
 // -- CVState

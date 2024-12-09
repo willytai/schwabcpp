@@ -3,12 +3,6 @@
 
 namespace schwabcpp {
 
-RefreshTokenResponse::RefreshTokenResponse(const RefreshTokenResponse& other)
-{
-    data = other.data;
-    isError = other.isError;
-}
-
 void RefreshTokenResponse::to_json(json& j, const RefreshTokenResponse& self)
 {
     if (self.isError) {

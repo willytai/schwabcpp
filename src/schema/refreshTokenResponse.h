@@ -13,35 +13,26 @@ using json = nlohmann::json;
 
 struct RefreshTokenResponse {
 
-    union {
+    struct {
+        std::string tokenType;
+        std::string scope;
+        std::string refreshToken;
+        std::string accessToken;
+        std::string idToken;
+        int         expiresIn;
 
-        struct {
-            std::string tokenType;
-            std::string scope;
-            std::string refreshToken;
-            std::string accessToken;
-            std::string idToken;
-            int         expiresIn;
+        // some other data that I want to keep
+        clock::rep  refreshTokenTS;
+        clock::rep  accessTokenTS;
+    }   data;
 
-            // some other data that I want to keep
-            clock::rep  refreshTokenTS;
-            clock::rep  accessTokenTS;
-        }   data;
-
-        struct {
-            std::string error;
-            std::string description;
-        }   error;
-    };
+    struct {
+        std::string error;
+        std::string description;
+    }   error;
 
     bool    isError;
 
-    // For some reason I have to explicitly define these because they are implicitly deleted
-    // (has something to do with having unions inside, wtf..)
-    RefreshTokenResponse() {}
-    RefreshTokenResponse(const RefreshTokenResponse& other);
-    ~RefreshTokenResponse() {}
-    
 static void to_json(json& j, const RefreshTokenResponse& self);
 static void from_json(const json& j, RefreshTokenResponse& data);
 };

@@ -2,12 +2,6 @@
 
 namespace schwabcpp {
 
-AccessTokenResponse::AccessTokenResponse(const AccessTokenResponse& other)
-{
-    data = other.data;
-    isError = other.isError;
-}
-
 void AccessTokenResponse::to_json(json& j, const AccessTokenResponse& self)
 {
     if (self.isError) {
