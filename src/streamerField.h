@@ -1,6 +1,8 @@
 #ifndef __STREAMER_FIELD_H__
 #define __STREAMER_FIELD_H__
 
+#include <string>
+
 namespace schwabcpp {
 
 struct StreamerField {
@@ -58,7 +60,11 @@ struct StreamerField {
         Shortable = 49,
         PostMarketNetChange = 50,
         PostMarketPresentChange = 51,
+
+        Unknown,
     };
+
+    static LevelOneEquity toLevelOneEquityField(const std::string& key);
 
 };
 
