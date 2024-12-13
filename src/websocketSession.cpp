@@ -28,7 +28,7 @@ WebsocketSession::WebsocketSession(
 
 WebsocketSession::~WebsocketSession()
 {
-    asyncDisconnect();
+    shutdown();
 
     // join here
     if (m_senderDaemon.joinable()) {
@@ -273,7 +273,7 @@ void WebsocketSession::onWebsocketHandshake(
     }
 }
 
-void WebsocketSession::asyncDisconnect()
+void WebsocketSession::disconnect()
 {
     // update the flag to Disconnected
     // unset RunSenderDaemon and RunReceiverLoop
@@ -292,23 +292,54 @@ void WebsocketSession::asyncDisconnect()
         m_cv.notify_all();
     }
 
+    // close
+    if (m_websocketStream && m_websocketStream->is_open()) {
+        LOG_TRACE("Closing websocket stream...");
+
+        // NOTE:
+        // ssl::error::stream_truncated, also known as an SSL "short read",
+        // indicates the peer closed the connection without performing the
+        // required closing handshake (for example, Google does this to
+        // improve performance). Generally this can be a security issue,
+        // but if your communication protocol is self-terminated (as
+        // it is with both HTTP and WebSocket) then you may simply
+        // ignore the lack of close_notify.
+        //
+        // https://github.com/boostorg/beast/issues/38
+        //
+        // https://security.stackexchange.com/questions/91435/how-to-handle-a-malicious-ssl-tls-shutdown
+        //
+        beast::error_code ec;
+        m_websocketStream->close(websocket::close_code::normal, ec);
+        if (ec != net::ssl::error::stream_truncated) {
+            // propagate the rest
+            throw beast::system_error{ec};
+        }
+
+        // NOTE:
+        // Is is also stated that read op should be followed by close. It is when
+        // websocket::error::closed is received that the websocket has successfully closed.
+        // However, since I'm getting stream truncated error on close, this never happens
+        // (the websocket wasn't gracefully closed).
+        // So I'll just leave the draining code out for now.
+        //
+        // LOG_TRACE("Draining stream...");
+        // m_websocketStream->read(m_buffer, ec);
+        // while (ec != beast::websocket::error::closed) {
+        //     m_websocketStream->read(m_buffer, ec);
+        // }
+
+        // m_websocketStream->async_close(
+        //     websocket::close_code::normal,
+        //     beast::bind_front_handler(
+        //         &WebsocketSession::onClose,
+        //         shared_from_this()
+        //     )
+        // );
+    }
+
     // release
     m_websocketStream.reset();
-
-    // NOTE: Explicitly closing always results in stream truncated error for some unknown reason...
-    //       Leaving it and just let the websocket stream be destroyed turns out to work normally, so
-    //       I'll leave this part commented out.
-    //
-    // if (m_websocketStream.is_open()) {
-    //     LOG_TRACE("Closing websocket stream.");
-    //     m_websocketStream.async_close(
-    //         websocket::close_code::normal,
-    //         beast::bind_front_handler(
-    //             &WebsocketSession::onClose,
-    //             shared_from_this()
-    //         )
-    //     );
-    // }
 }
 
 void WebsocketSession::onClose(beast::error_code ec)
@@ -417,7 +448,7 @@ void WebsocketSession::stopReceiverLoop()
 
         // this stops the receiver loop but DOESN'T
         // stop the message sender
-        // only asyncDisconnect does
+        // only disconnect does
         m_state.setFlag(CVState::RunReceiverLoop, false);
     } else {
         LOG_WARN("Receiver loop not running.");
@@ -489,7 +520,7 @@ void WebsocketSession::asyncReconnect()
     LOG_DEBUG("Attempting reconnection to {}...", m_host);
 
     // do some housekeeping
-    asyncDisconnect();
+    disconnect();
     if (m_senderDaemon.joinable()) {
         m_senderDaemon.join();
     }
@@ -502,6 +533,11 @@ bool WebsocketSession::isConnected() const
 {
     std::lock_guard<std::mutex> lock(m_mutex_state);
     return m_state.testState(CVState::WebsocketHandshaked);
+}
+
+void WebsocketSession::shutdown()
+{
+    disconnect();
 }
 
 // -- sender daemon

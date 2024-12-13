@@ -91,19 +91,19 @@ int main(int argc, char** argv) {
         client.startStreamer();
 
         // TEST: testing pause resume
-        {
-            std::this_thread::sleep_for(std::chrono::seconds(5));
-            client.pauseStreamer();
-            std::this_thread::sleep_for(std::chrono::seconds(5));
-            client.resumeStreamer();
-        }
+        // {
+        //     std::this_thread::sleep_for(std::chrono::seconds(5));
+        //     client.pauseStreamer();
+        //     std::this_thread::sleep_for(std::chrono::seconds(5));
+        //     client.resumeStreamer();
+        // }
 
         std::this_thread::sleep_for(std::chrono::seconds(5));
         // std::this_thread::sleep_for(std::chrono::minutes(3));
 
         client.stopStreamer();
 
-        std::this_thread::sleep_for(std::chrono::seconds(30));
+        // std::this_thread::sleep_for(std::chrono::seconds(30));
     }
 
     logger->info("Program exited normally.");

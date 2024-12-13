@@ -45,7 +45,6 @@ public:
     // I can't make it auto connect during construnction due to the "enable_shared_from_this"
     // desgin.
     void                                                asyncConnect(std::function<void()> onFinalHandshake = {});
-    void                                                asyncDisconnect();
 
     void                                                asyncSend(const std::string& request, std::function<void()> callback = {});
     void                                                asyncReceive(std::function<void(const std::string&)> callback);
@@ -56,6 +55,8 @@ public:
     bool                                                isConnected() const;
 
     void                                                onReconnect(std::function<void()> callback) { m_onReconnection = callback; }
+
+    void                                                shutdown();
 
 private:
     void                                                onResolve(
@@ -94,6 +95,9 @@ private:
                                                             beast::error_code ec,
                                                             std::size_t bytesTransferred
                                                         );
+
+    // this is sync
+    void                                                disconnect();
 
     // this is for reconnecting when the read loop fails
     void                                                asyncReconnect();

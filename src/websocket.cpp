@@ -35,7 +35,8 @@ Websocket::Websocket(const std::string& url)
 Websocket::~Websocket()
 {
     LOG_TRACE("Shutting down websocket session...");
-    m_session->asyncDisconnect();
+    m_session->shutdown();
+    m_session.reset();
 
     LOG_TRACE("Stopping websocket io context...");
     // not using boost::asio::io_context::stop so that the io context
