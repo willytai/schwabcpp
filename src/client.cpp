@@ -147,7 +147,7 @@ bool Client::connect()
                     m_linkedAccounts[data.at("accountNumber")] = data.at("hashValue");
                 }
 
-                LOG_INFO("Linked accounts info cached.");
+                LOG_DEBUG("Linked accounts info cached.");
             } catch (...) {
                 // TODO:
             }
@@ -159,7 +159,7 @@ bool Client::connect()
             try {
                 json::parse(syncRequest(url)).get_to(m_userPreference);
 
-                LOG_INFO("User preference cached.");
+                LOG_DEBUG("User preference cached.");
             } catch (...) {
                 // TODO:
             }
@@ -323,44 +323,11 @@ std::string Client::syncRequest(std::string url, HttpRequestQueries queries)
 // async api (mostly for interacting with the streamer)
 //
 // It is safe to call all these functions before the streamer starts. All these requests are queued.
-// They will be sent to the streamer once it is online.
+// The streamer will send them once it is online.
 void Client::subscribeLevelOneEquities(const std::vector<std::string>& tickers,
                                        const std::vector<StreamerField::LevelOneEquity>& fields)
 {
-    // NOTE: The streamer requires the symbol field to exist.
-    //       It also requires the fields to be sorted in ascending order.
-    //       Another thing to note is that the streamer does not support overwriting the existing subscribed fields.
-    //       If you try to add a new subscription with different fields of the same service type, they would not go through.
-    //       You will only get data of the old subscribed fields.
-    //       To add or change new fields to the streamer, you have to do a complete new subscription for all the tickers.
-    //       (What a trash API...)
-    std::vector<StreamerField::LevelOneEquity>& tmp = const_cast<std::vector<StreamerField::LevelOneEquity>&>(fields);
-    std::sort(tmp.begin(), tmp.end(), [](StreamerField::LevelOneEquity left, StreamerField::LevelOneEquity right) {
-        return left < right;
-    });
-    if (tmp.front() != StreamerField::LevelOneEquity::Symbol) {
-        tmp.insert(tmp.begin(), StreamerField::LevelOneEquity::Symbol);
-    }
-    m_streamer->asyncRequest(
-        m_streamer->constructStreamRequest(
-            Streamer::RequestServiceType::LEVELONE_EQUITIES,
-            Streamer::RequestCommandType::ADD,
-            {
-                { "keys", std::accumulate(tickers.begin(), tickers.end(), std::string(), [](std::string acc, const std::string& val) {
-                    if (!acc.empty()) {
-                        acc += ",";
-                    }
-                    return acc + val;
-                }) },
-                { "fields", std::accumulate(fields.begin(), fields.end(), std::string(), [](std::string acc, const StreamerField::LevelOneEquity val) {
-                    if (!acc.empty()) {
-                        acc += ",";
-                    }
-                    return acc + std::to_string(static_cast<int>(val));
-                }) },
-            }
-        )
-    );
+    m_streamer->subscribeLevelOneEquities(tickers, fields);
 }
 
 std::vector<std::string>
@@ -379,7 +346,7 @@ bool Client::loadTokens()
 {
     bool result = false;
 
-    LOG_INFO("Loading token cache.");
+    LOG_DEBUG("Loading token cache...");
 
     if (std::filesystem::exists(tokenCacheFile)) {
         std::ifstream tokenCache(tokenCacheFile);
@@ -405,19 +372,19 @@ bool Client::loadTokens()
 
                 result = true;
 
-                LOG_DEBUG("{} seconds passed since access token last generated.",
+                LOG_TRACE("{} seconds passed since access token last generated.",
                           std::chrono::duration_cast<std::chrono::seconds>(clock::now() - m_accessTokenTS).count());
-                LOG_DEBUG("{} hours passed since refresh token last generated.",
+                LOG_TRACE("{} hours passed since refresh token last generated.",
                           std::chrono::duration_cast<std::chrono::hours>(clock::now() - m_refreshTokenTS).count());
-                LOG_INFO("Tokens loaded.");
+                LOG_DEBUG("Tokens loaded.");
             } else {
-                LOG_INFO("Token data corrupted please reauthorize.");
+                LOG_DEBUG("Token data corrupted please reauthorize.");
             }
         } else {
-            LOG_INFO("Token cache corrupted, please reauthorize.");
+            LOG_DEBUG("Token cache corrupted, please reauthorize.");
         }
     } else {
-        LOG_INFO("Token cache not found, authorization required.");
+        LOG_DEBUG("Token cache not found, authorization required.");
     }
 
     return result;

@@ -18,7 +18,7 @@ public:
 
     // This is the entry point. The constructor doesn't connect but configures the websocket.
     // This should be called explicitly to establish the connection.
-    void                                    asyncConnect(std::function<void()> onConnected = {});
+    void                                    asyncConnect(std::function<void()> onConnected = {}, std::function<void()> onReconnected = {});
     void                                    asyncSend(const std::string& request, std::function<void()> callback = {});
     void                                    asyncReceive(std::function<void(const std::string&)> callback);
 

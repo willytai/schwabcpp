@@ -3,6 +3,7 @@
 #include <boost/beast/core.hpp>
 #include <boost/beast/ssl.hpp>
 #include <boost/asio/strand.hpp>
+#include <chrono>
 
 namespace schwabcpp {
 
@@ -13,13 +14,15 @@ WebsocketSession::WebsocketSession(
     const std::string& port,
     const std::string& path
 )
-    : m_host(host)
+    : m_ioContext(ioContext)
+    , m_sslContext(sslContext)
+    , m_host(host)
     , m_port(port)
     , m_path(path)
     , m_state(CVState::Disconnected)
     , m_resolver(net::make_strand(ioContext))
     , m_receiverLoopRunning(false)
-    , m_websocketStream(net::make_strand(ioContext), sslContext)
+    , m_shouldReconnectReceiverLoop(false)
 {
 }
 
@@ -46,13 +49,17 @@ void WebsocketSession::asyncConnect(std::function<void()> onFinalHandshake)
         shared_from_this()
     );
 
+    // we need to create a new stream for every connection call
+    m_websocketStream = std::make_unique<WebsocketStream>(net::make_strand(m_ioContext), m_sslContext);
+
+    // start the procedure
     m_resolver.async_resolve(
         m_host,
         m_port,
         beast::bind_front_handler(
             &WebsocketSession::onResolve,
             shared_from_this(),
-            onFinalHandshake    // pass it down the chain
+            onFinalHandshake
         )
     );
 }
@@ -63,7 +70,23 @@ void WebsocketSession::onResolve(
     tcp::resolver::results_type results)
 {
     if (ec) {
-        LOG_ERROR("Resolve failed. Error: {}", ec.message());
+        LOG_WARN("Resolve failed. Error: {}. (Will retry in 10 seconds...)", ec.message());
+
+        // retry after 10 seconds
+        std::this_thread::sleep_for(std::chrono::seconds(10));
+
+        // we need to create a new stream for reconnection
+        m_websocketStream = std::make_unique<WebsocketStream>(net::make_strand(m_ioContext), m_sslContext);
+
+        m_resolver.async_resolve(
+            m_host,
+            m_port,
+            beast::bind_front_handler(
+                &WebsocketSession::onResolve,
+                shared_from_this(),
+                onFinalHandshake
+            )
+        );
     } else {
         {
             std::lock_guard<std::mutex> lock(m_mutex_state);
@@ -72,15 +95,15 @@ void WebsocketSession::onResolve(
         }
 
         // Set a timeout on the operation
-        beast::get_lowest_layer(m_websocketStream).expires_after(std::chrono::seconds(30));
+        beast::get_lowest_layer(*m_websocketStream).expires_after(std::chrono::seconds(30));
 
         // Connect
-        beast::get_lowest_layer(m_websocketStream).async_connect(
+        beast::get_lowest_layer(*m_websocketStream).async_connect(
             results,
             beast::bind_front_handler(
                 &WebsocketSession::onConnect,
                 shared_from_this(),
-                onFinalHandshake    // pass it down the chain
+                onFinalHandshake
             )
         );
     }
@@ -92,11 +115,27 @@ void WebsocketSession::onConnect(
     tcp::resolver::results_type::endpoint_type endpoint)
 {
     if (ec) {
-        LOG_ERROR("Connection failed. Error: {}", ec.message());
+        LOG_ERROR("Connection failed. Error: {}. (Will retry in 10 seconds...)", ec.message());
+
+        // retry after 10 seconds, restart from the very first step
+        std::this_thread::sleep_for(std::chrono::seconds(10));
+
+        // we need to create a new stream for reconnection
+        m_websocketStream = std::make_unique<WebsocketStream>(net::make_strand(m_ioContext), m_sslContext);
+
+        m_resolver.async_resolve(
+            m_host,
+            m_port,
+            beast::bind_front_handler(
+                &WebsocketSession::onResolve,
+                shared_from_this(),
+                onFinalHandshake
+            )
+        );
     } else {
         // Set SNI Hostname (many hosts need this to handshake successfully)
         if (!SSL_set_tlsext_host_name(
-                m_websocketStream.next_layer().native_handle(),
+                m_websocketStream->next_layer().native_handle(),
                 m_host.c_str()))
         {
             ec = beast::error_code(static_cast<int>(::ERR_get_error()),
@@ -111,15 +150,15 @@ void WebsocketSession::onConnect(
         }
 
         // Set a timeout on the operation
-        beast::get_lowest_layer(m_websocketStream).expires_after(std::chrono::seconds(30));
+        beast::get_lowest_layer(*m_websocketStream).expires_after(std::chrono::seconds(30));
 
         // Perform the ssl handshake
-        m_websocketStream.next_layer().async_handshake(
+        m_websocketStream->next_layer().async_handshake(
             ssl::stream_base::client,
             beast::bind_front_handler(
                 &WebsocketSession::onSSLHandshake,
                 shared_from_this(),
-                onFinalHandshake    // pass it down the chain
+                onFinalHandshake
             )
         );
     }
@@ -130,7 +169,23 @@ void WebsocketSession::onSSLHandshake(
     beast::error_code ec)
 {
     if (ec) {
-        LOG_ERROR("SSL handshake failed. Error: {}", ec.message());
+        LOG_ERROR("SSL handshake failed. Error: {}. (Will retry in 10 seconds...)", ec.message());
+
+        // retry after 10 seconds, restart from the very first step
+        std::this_thread::sleep_for(std::chrono::seconds(10));
+
+        // we need to create a new stream for reconnection
+        m_websocketStream = std::make_unique<WebsocketStream>(net::make_strand(m_ioContext), m_sslContext);
+
+        m_resolver.async_resolve(
+            m_host,
+            m_port,
+            beast::bind_front_handler(
+                &WebsocketSession::onResolve,
+                shared_from_this(),
+                onFinalHandshake
+            )
+        );
     } else {
         {
             std::lock_guard<std::mutex> lock(m_mutex_state);
@@ -140,17 +195,17 @@ void WebsocketSession::onSSLHandshake(
 
         // Turn off the timeout on the tcp_stream, because
         // the websocket stream has its own timeout system.
-        beast::get_lowest_layer(m_websocketStream).expires_never();
+        beast::get_lowest_layer(*m_websocketStream).expires_never();
 
         // Set suggested timeout settings for the websocket
-        m_websocketStream.set_option(
+        m_websocketStream->set_option(
             websocket::stream_base::timeout::suggested(
                 beast::role_type::client
             )
         );
 
         // Set a decorator to change the User-Agent of the handshake
-        m_websocketStream.set_option(
+        m_websocketStream->set_option(
             websocket::stream_base::decorator(
                 [](websocket::request_type& req)
                 {
@@ -162,13 +217,13 @@ void WebsocketSession::onSSLHandshake(
         );
 
         // Perform the websocket handshake
-        m_websocketStream.async_handshake(
+        m_websocketStream->async_handshake(
             m_host + ":" + m_port,
             m_path,
             beast::bind_front_handler(
                 &WebsocketSession::onWebsocketHandshake,
                 shared_from_this(),
-                onFinalHandshake    // pass it down the chain
+                onFinalHandshake
             )
         );
     }
@@ -179,9 +234,25 @@ void WebsocketSession::onWebsocketHandshake(
     beast::error_code ec)
 {
     if (ec) {
-        LOG_ERROR("Websocket handshake failed. Error: {}", ec.message());
+        LOG_ERROR("Websocket handshake failed. Error: {}. (Will retry in 10 seconds...)", ec.message());
+
+        // retry after 10 seconds, restart from the very first step
+        std::this_thread::sleep_for(std::chrono::seconds(10));
+
+        // we need to create a new stream for reconnection
+        m_websocketStream = std::make_unique<WebsocketStream>(net::make_strand(m_ioContext), m_sslContext);
+
+        m_resolver.async_resolve(
+            m_host,
+            m_port,
+            beast::bind_front_handler(
+                &WebsocketSession::onResolve,
+                shared_from_this(),
+                onFinalHandshake
+            )
+        );
     } else {
-        LOG_INFO("Websocket successfully connected to {}.", m_host);
+        LOG_DEBUG("Websocket successfully connected to {}.", m_host);
 
         // set the flag
         {
@@ -193,8 +264,12 @@ void WebsocketSession::onWebsocketHandshake(
         // notify the connection status
         m_cv.notify_all();
 
-        // invoke the custom handler
-        onFinalHandshake();
+        // invoke the callback
+        if (onFinalHandshake) {
+            onFinalHandshake();
+        } else {
+            LOG_DEBUG("No callback provided on connection.");
+        }
     }
 }
 
@@ -202,24 +277,28 @@ void WebsocketSession::asyncDisconnect()
 {
     // update the flag to Disconnected
     // unset RunSenderDaemon and RunReceiverLoop
-    // notify if sender daemon is running
+    // should stop auto reconnection when disconnect is called
     {
         std::lock_guard<std::mutex> lock(m_mutex_state);
         m_state.setState(CVState::Disconnected);
         m_state.setFlag(CVState::RunReceiverLoop, false);
         m_state.setFlag(CVState::RunSenderDaemon, false);
+        m_shouldReconnectReceiverLoop = false;
     }
 
     // stop the sender daemon if it is running
     if (m_senderDaemon.joinable()) {
-        LOG_TRACE("Stopping websocket session sender daemon.");
+        LOG_TRACE("Stopping websocket session sender daemon...");
         m_cv.notify_all();
     }
+
+    // release
+    m_websocketStream.reset();
 
     // NOTE: Explicitly closing always results in stream truncated error for some unknown reason...
     //       Leaving it and just let the websocket stream be destroyed turns out to work normally, so
     //       I'll leave this part commented out.
-
+    //
     // if (m_websocketStream.is_open()) {
     //     LOG_TRACE("Closing websocket stream.");
     //     m_websocketStream.async_close(
@@ -237,7 +316,7 @@ void WebsocketSession::onClose(beast::error_code ec)
     if (ec) {
         LOG_ERROR("Close failed. Error: {}", ec.message());
     } else {
-        LOG_INFO("Websocket successfully closed.");
+        LOG_DEBUG("Websocket successfully closed.");
     }
 }
 
@@ -273,7 +352,7 @@ void WebsocketSession::onWrite(
 
 void WebsocketSession::asyncReceive(std::function<void(const std::string&)> callback)
 {
-    m_websocketStream.async_read(
+    m_websocketStream->async_read(
         m_buffer,
         beast::bind_front_handler(
             &WebsocketSession::onRead,
@@ -300,7 +379,7 @@ void WebsocketSession::onRead(
 
 void WebsocketSession::startReceiverLoop(std::function<void(const std::string&)> callback)
 {
-    LOG_INFO("Websocket session starting receiver loop.");
+    LOG_DEBUG("Websocket session starting receiver loop...");
 
     // set the flag
     {
@@ -310,7 +389,12 @@ void WebsocketSession::startReceiverLoop(std::function<void(const std::string&)>
 
     if (!m_receiverLoopRunning) {
         m_receiverLoopRunning = true;
-        m_websocketStream.async_read(
+        m_shouldReconnectReceiverLoop = true;  // auto reconnect
+
+        // put a timeout for the read op
+        beast::get_lowest_layer(*m_websocketStream).expires_after(std::chrono::seconds(30));
+
+        m_websocketStream->async_read(
             m_buffer,
             beast::bind_front_handler(
                 &WebsocketSession::onReceiveLoop,
@@ -329,7 +413,7 @@ void WebsocketSession::stopReceiverLoop()
 
     // no point stopping if loop not running
     if (m_state.testFlag(CVState::RunReceiverLoop)) {
-        LOG_INFO("Websocket session stopping receiver loop.");
+        LOG_DEBUG("Websocket session stopping receiver loop...");
 
         // this stops the receiver loop but DOESN'T
         // stop the message sender
@@ -351,22 +435,24 @@ void WebsocketSession::onReceiveLoop(
             std::lock_guard lock(m_mutex_state);
             m_state.setFlag(CVState::RunReceiverLoop, false);
         }
-        // receive loop will exit for now if an error is caught
-        // TODO: reconnect when this happens
-        LOG_ERROR("Websocket loop receive failed. Receiver loop stopped.");
-        LOG_ERROR("Error code: {}", ec.value());
-        LOG_ERROR("Error what: {}", ec.what());
-        LOG_ERROR("Error message: {}", ec.message());
-        LOG_ERROR("Error category.name: {}", ec.category().name());
-        LOG_ERROR("Error to_string: {}", ec.to_string());
-        LOG_ERROR("Error location.to_string: {}", ec.location().to_string());
+        m_receiverLoopRunning = false;
+
+        LOG_WARN("Websocket loop receive failed: {}. Receiver loop stopped.", ec.message());
+
+        // reconnect
+        if (m_shouldReconnectReceiverLoop) {
+            asyncReconnect();
+        }
     } else {
+        // successful read, reset expiry
+        beast::get_lowest_layer(*m_websocketStream).expires_never();
+
         // proceed if we are in the right state with the right flag
         std::unique_lock<std::mutex> lock(m_mutex_state);
         if (!m_state.testState(CVState::WebsocketHandshaked)) {
             lock.unlock();
 
-            LOG_TRACE("Websocket not connected, stopping websocket session receiver loop.");
+            LOG_TRACE("Websocket not connected, stopping websocket session receiver loop...");
             m_buffer.clear();
         } else if (m_state.testFlag(CVState::RunReceiverLoop)) {
             lock.unlock();
@@ -376,8 +462,11 @@ void WebsocketSession::onReceiveLoop(
             }
             m_buffer.clear();
 
+            // put a timeout for the next read op
+            beast::get_lowest_layer(*m_websocketStream).expires_after(std::chrono::seconds(30));
+
             // queue the next read
-            m_websocketStream.async_read(
+            m_websocketStream->async_read(
                 m_buffer,
                 beast::bind_front_handler(
                     &WebsocketSession::onReceiveLoop,
@@ -388,10 +477,25 @@ void WebsocketSession::onReceiveLoop(
         } else {
             lock.unlock();
             m_receiverLoopRunning = false;
+            m_shouldReconnectReceiverLoop = false;
 
-            LOG_TRACE("Websocket session receiver loop run flag unset. Stopping loop.");
+            LOG_TRACE("Websocket session receiver loop run flag unset. Stopping loop...");
         }
     }
+}
+
+void WebsocketSession::asyncReconnect()
+{
+    LOG_DEBUG("Attempting reconnection to {}...", m_host);
+
+    // do some housekeeping
+    asyncDisconnect();
+    if (m_senderDaemon.joinable()) {
+        m_senderDaemon.join();
+    }
+
+    // connect
+    asyncConnect(m_onReconnection);
 }
 
 bool WebsocketSession::isConnected() const
@@ -429,7 +533,7 @@ void WebsocketSession::sendMessages()
             // consecutive writes has to be blocking
             // TODO:
             // add error handling here, this is not guaranteed to succeed
-            m_websocketStream.write(net::buffer(payload.request));
+            m_websocketStream->write(net::buffer(payload.request));
             // run the callback
             if (payload.callback) {
                 payload.callback();

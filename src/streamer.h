@@ -3,6 +3,7 @@
 
 #include <unordered_map>
 #include "websocket.h"
+#include "streamerField.h"
 #include "schema/userPreference.h"
 
 namespace schwabcpp {
@@ -59,6 +60,13 @@ public:
 
     void                        setDataHandler(std::function<void(const std::string&)> handler) { m_dataHandler = handler; }
 
+    void                        subscribeLevelOneEquities(const std::vector<std::string>& tickers,
+                                                          const std::vector<StreamerField::LevelOneEquity>& fields);
+
+private:
+    void                        onWebsocketConnected();
+    void                        onWebsocketReconnected();
+
     void                        asyncRequest(const std::string& request, std::function<void()> callback = {});
 
     std::string                 constructStreamRequest(
@@ -81,9 +89,6 @@ public:
     std::string                 batchStreamRequests(const std::vector<std::string>& requests);
 
 private:
-    void                        onWebsocketConnected();
-
-private:
     // -- what the sender daemon runs
     void                        sendRequests();
 
@@ -97,6 +102,8 @@ private:
 
     std::function<void(const std::string&)>
                                 m_dataHandler;
+
+    std::vector<std::string>    m_subscriptionRecord;
 
     // -- request queue and sender control
     class CVState {

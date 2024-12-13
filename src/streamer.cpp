@@ -21,12 +21,12 @@ Streamer::Streamer(Client* client)
     , m_dataHandler(defaultStreamerDataHandler)
     , m_state(CVState::Inactive)
 {
-    LOG_INFO("Initializing streamer...");
+    LOG_DEBUG("Initializing streamer...");
 
     // get the streamer info
     try {
         m_streamerInfo = m_client->getUserPreference().streamerInfo.front();
-        LOG_INFO("Streamer info copied.");
+        LOG_DEBUG("Streamer info copied.");
     } catch (...) {
         LOG_ERROR("Failed to retrieve streamer info.");
     }
@@ -44,12 +44,15 @@ Streamer::~Streamer()
 
 void Streamer::start()
 {
-    LOG_INFO("Starting streamer...");
+    LOG_DEBUG("Starting streamer...");
 
     // create the websocket
     m_websocket = std::make_unique<Websocket>(m_streamerInfo.streamerSocketUrl);
     // connect and login
-    m_websocket->asyncConnect(std::bind(&Streamer::onWebsocketConnected, this));
+    m_websocket->asyncConnect(
+        std::bind(&Streamer::onWebsocketConnected, this),
+        std::bind(&Streamer::onWebsocketReconnected, this)
+    );
 
     // set the run sender daemon flag
     // don't need mutex here, sender not launched yet
@@ -61,46 +64,46 @@ void Streamer::start()
     );
 
     // TEST: test subscription
-    std::string testSubRequest1 = constructStreamRequest(
-        // RequestServiceType::LEVELONE_EQUITIES,
-        // RequestCommandType::SUBS,
-        // {
-        //     { "keys", "SPY" },
-        //     { "fields", "0,1,2,3,33"  },
-        // }
-            RequestServiceType::OPTIONS_BOOK,
-            RequestCommandType::SUBS,
-            {
-                { "keys", "NVDA  241220C00140000" },
-                { "fields", "0,1,2,3" },
-            }
-    );
-    std::string testSubRequest2 = batchStreamRequests(
-        constructStreamRequest(
-            RequestServiceType::LEVELONE_EQUITIES,
-            RequestCommandType::SUBS,
-            {
-                { "keys", "SPY" },
-                { "fields", "0,1,2,3,33"  },
-            }
-        )
-        // constructStreamRequest(
-        //     RequestServiceType::NASDAQ_BOOK,
-        //     RequestCommandType::ADD,
-        //     {
-        //         { "keys", "NVDA" },
-        //         { "fields", "0,1,2,3" },
-        //     }
-        // ),
-        // constructStreamRequest(
-        //     RequestServiceType::NYSE_BOOK,
-        //     RequestCommandType::ADD,
-        //     {
-        //         { "keys", "PLTR" },
-        //         { "fields", "0,1,2,3" },
-        //     }
-        // )
-    );
+    // std::string testSubRequest1 = constructStreamRequest(
+    //     // RequestServiceType::LEVELONE_EQUITIES,
+    //     // RequestCommandType::SUBS,
+    //     // {
+    //     //     { "keys", "SPY" },
+    //     //     { "fields", "0,1,2,3,33"  },
+    //     // }
+    //         RequestServiceType::OPTIONS_BOOK,
+    //         RequestCommandType::SUBS,
+    //         {
+    //             { "keys", "NVDA  241220C00140000" },
+    //             { "fields", "0,1,2,3" },
+    //         }
+    // );
+    // std::string testSubRequest2 = batchStreamRequests(
+    //     constructStreamRequest(
+    //         RequestServiceType::LEVELONE_EQUITIES,
+    //         RequestCommandType::SUBS,
+    //         {
+    //             { "keys", "SPY" },
+    //             { "fields", "0,1,2,3,33"  },
+    //         }
+    //     )
+    //     // constructStreamRequest(
+    //     //     RequestServiceType::NASDAQ_BOOK,
+    //     //     RequestCommandType::ADD,
+    //     //     {
+    //     //         { "keys", "NVDA" },
+    //     //         { "fields", "0,1,2,3" },
+    //     //     }
+    //     // ),
+    //     // constructStreamRequest(
+    //     //     RequestServiceType::NYSE_BOOK,
+    //     //     RequestCommandType::ADD,
+    //     //     {
+    //     //         { "keys", "PLTR" },
+    //     //         { "fields", "0,1,2,3" },
+    //     //     }
+    //     // )
+    // );
     // asyncRequest(testSubRequest1);
     // asyncRequest(testSubRequest2);
 }
@@ -124,7 +127,7 @@ void Streamer::onWebsocketConnected()
     );
 
     // queue the login request
-    m_websocket->asyncSend(loginRequest, [](){ LOG_INFO("Logging in..."); });
+    m_websocket->asyncSend(loginRequest, [](){ LOG_DEBUG("Streamer logging in..."); });
     // queue the login response handler
     m_websocket->asyncReceive(
         [this](const std::string& response) {
@@ -153,7 +156,7 @@ void Streamer::onWebsocketConnected()
                             if (code != 0) {
                                 LOG_ERROR("Login failed. Error code: {}, Msg: {}", code, msg);
                             } else {
-                                LOG_INFO("Successfully logged in.");
+                                LOG_DEBUG("Successfully logged in.");
 
                                 // notify the status
                                 {
@@ -173,6 +176,61 @@ void Streamer::onWebsocketConnected()
     );
 }
 
+void Streamer::onWebsocketReconnected()
+{
+    // resubscribe the subscribed data after calling onWebsocketConnected
+
+    onWebsocketConnected();
+
+    LOG_DEBUG("Restoring subscription...");
+    for (const auto& request : m_subscriptionRecord) {
+        asyncRequest(request);
+    }
+}
+
+void Streamer::subscribeLevelOneEquities(const std::vector<std::string>& tickers,
+                                         const std::vector<StreamerField::LevelOneEquity>& fields)
+{
+    // NOTE: The streamer requires the symbol field to exist.
+    //       It also requires the fields to be sorted in ascending order.
+    //       Another thing to note is that the streamer does not support overwriting the existing subscribed fields.
+    //       If you try to add a new subscription with different fields of the same service type, they would not go through.
+    //       You will only get data of the old subscribed fields.
+    //       To add or change new fields to the streamer, you have to do a complete new subscription for all the tickers.
+    //       (What a trash API...)
+    std::vector<StreamerField::LevelOneEquity>& tmp = const_cast<std::vector<StreamerField::LevelOneEquity>&>(fields);
+    std::sort(tmp.begin(), tmp.end(), [](StreamerField::LevelOneEquity left, StreamerField::LevelOneEquity right) {
+        return left < right;
+    });
+    if (tmp.front() != StreamerField::LevelOneEquity::Symbol) {
+        tmp.insert(tmp.begin(), StreamerField::LevelOneEquity::Symbol);
+    }
+    std::string request = constructStreamRequest(
+        Streamer::RequestServiceType::LEVELONE_EQUITIES,
+        Streamer::RequestCommandType::ADD,
+        {
+            { "keys", std::accumulate(tickers.begin(), tickers.end(), std::string(), [](std::string acc, const std::string& val) {
+                if (!acc.empty()) {
+                    acc += ",";
+                }
+                return acc + val;
+            }) },
+            { "fields", std::accumulate(fields.begin(), fields.end(), std::string(), [](std::string acc, const StreamerField::LevelOneEquity val) {
+                if (!acc.empty()) {
+                    acc += ",";
+                }
+                return acc + std::to_string(static_cast<int>(val));
+            }) },
+        }
+    );
+
+    // record the subscription request incase of reconnection
+    m_subscriptionRecord.push_back(request);
+
+    // send
+    asyncRequest(request);
+}
+
 void Streamer::stop()
 {
     LOG_TRACE("Stopping streamer...");
@@ -186,7 +244,7 @@ void Streamer::stop()
 
     // stop the request daemon if it is running
     if (m_requestDaemon.joinable()) {
-        LOG_TRACE("Stopping streamer request daemon.");
+        LOG_TRACE("Stopping streamer request daemon...");
         m_cv.notify_all();
     }
 
@@ -200,7 +258,7 @@ void Streamer::pause()
 
     // we can only pause if we are active
     if (m_state.testState(CVState::Active)) {
-        LOG_DEBUG("Pausing streamer.");
+        LOG_DEBUG("Pausing streamer...");
 
         // for pausing the request sender
         // just change the state

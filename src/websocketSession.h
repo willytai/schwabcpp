@@ -30,6 +30,7 @@ using tcp = boost::asio::ip::tcp;       // from <boost/asio/ip/tcp.hpp>
 
 class WebsocketSession : public std::enable_shared_from_this<WebsocketSession>
 {
+    using WebsocketStream = websocket::stream<ssl::stream<beast::tcp_stream>>;
 public:
     explicit                                            WebsocketSession(
                                                             net::io_context& ioContext,
@@ -53,6 +54,8 @@ public:
     void                                                stopReceiverLoop();
 
     bool                                                isConnected() const;
+
+    void                                                onReconnect(std::function<void()> callback) { m_onReconnection = callback; }
 
 private:
     void                                                onResolve(
@@ -92,23 +95,34 @@ private:
                                                             std::size_t bytesTransferred
                                                         );
 
+    // this is for reconnecting when the read loop fails
+    void                                                asyncReconnect();
+
     // what the sender daemon runs
 private:
     void                                                sendMessages();
 
 private:
+    // -- need a reference to these to reconnect the stream
+    boost::asio::io_context&                            m_ioContext;
+    boost::asio::ssl::context&                          m_sslContext;
+
     // -- data
     std::string                                         m_host;
     std::string                                         m_port;
     std::string                                         m_path;
     beast::flat_buffer                                  m_buffer;
 
+    // -- callback on reconnection
+    std::function<void()>                               m_onReconnection;
+
     // -- handles
     tcp::resolver                                       m_resolver;
-    websocket::stream<ssl::stream<beast::tcp_stream>>   m_websocketStream;
+    std::unique_ptr<WebsocketStream>                    m_websocketStream;
 
     // -- receiver loop
     bool                                                m_receiverLoopRunning;
+    bool                                                m_shouldReconnectReceiverLoop;
 
     // -- message queue and sender control
     class CVState {

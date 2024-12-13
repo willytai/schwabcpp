@@ -13,7 +13,7 @@ Websocket::Websocket(const std::string& url)
     : m_sslContext(boost::asio::ssl::context::sslv23)
     , m_workGuard(net::make_work_guard(m_ioContext))
 {
-    LOG_INFO("Initializing websocket.");
+    LOG_DEBUG("Initializing websocket...");
 
     // parse the url
     auto pos = url.find("://");
@@ -34,10 +34,10 @@ Websocket::Websocket(const std::string& url)
 
 Websocket::~Websocket()
 {
-    LOG_TRACE("Disconnecting websocket session.");
+    LOG_TRACE("Shutting down websocket session...");
     m_session->asyncDisconnect();
 
-    LOG_TRACE("Stopping websocket io context.");
+    LOG_TRACE("Stopping websocket io context...");
     // not using boost::asio::io_context::stop so that the io context
     // will wait for the pending disconnect call to finish before exiting
     m_workGuard.reset();
@@ -46,7 +46,7 @@ Websocket::~Websocket()
     }
 }
 
-void Websocket::asyncConnect(std::function<void()> onConnected)
+void Websocket::asyncConnect(std::function<void()> onConnected, std::function<void()> onReconnected)
 {
     // session
     m_session = std::make_shared<WebsocketSession>(
@@ -57,13 +57,15 @@ void Websocket::asyncConnect(std::function<void()> onConnected)
         __path
     );
 
+    // reconnect callback
+    m_session->onReconnect(onReconnected);
     // queue connect call
     m_session->asyncConnect(onConnected);
     // run the io context
     m_ioContextThread = std::thread(
         [this]() {
             m_ioContext.run();
-            LOG_TRACE("IO context thread exiting.");
+            LOG_TRACE("IO context thread terminated.");
         }
     );
 }
