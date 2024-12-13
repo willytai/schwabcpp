@@ -98,8 +98,8 @@ int main(int argc, char** argv) {
         //     client.resumeStreamer();
         // }
 
-        std::this_thread::sleep_for(std::chrono::seconds(5));
-        // std::this_thread::sleep_for(std::chrono::minutes(3));
+        // std::this_thread::sleep_for(std::chrono::seconds(5));
+        std::this_thread::sleep_for(std::chrono::minutes(3));
 
         client.stopStreamer();
 

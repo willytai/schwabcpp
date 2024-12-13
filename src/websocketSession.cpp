@@ -273,7 +273,7 @@ void WebsocketSession::onWebsocketHandshake(
     }
 }
 
-void WebsocketSession::disconnect()
+void WebsocketSession::asyncDisconnect(std::function<void()> callback)
 {
     // update the flag to Disconnected
     // unset RunSenderDaemon and RunReceiverLoop
@@ -292,62 +292,123 @@ void WebsocketSession::disconnect()
         m_cv.notify_all();
     }
 
-    // close
-    if (m_websocketStream && m_websocketStream->is_open()) {
-        LOG_TRACE("Closing websocket stream...");
+    if (m_websocketStream) {
+        if (m_websocketStream->is_open()) {
+            // close if open
+            LOG_TRACE("Closing websocket stream...");
 
-        // NOTE:
-        // ssl::error::stream_truncated, also known as an SSL "short read",
-        // indicates the peer closed the connection without performing the
-        // required closing handshake (for example, Google does this to
-        // improve performance). Generally this can be a security issue,
-        // but if your communication protocol is self-terminated (as
-        // it is with both HTTP and WebSocket) then you may simply
-        // ignore the lack of close_notify.
-        //
-        // https://github.com/boostorg/beast/issues/38
-        //
-        // https://security.stackexchange.com/questions/91435/how-to-handle-a-malicious-ssl-tls-shutdown
-        //
-        beast::error_code ec;
-        m_websocketStream->close(websocket::close_code::normal, ec);
-        if (ec != net::ssl::error::stream_truncated) {
-            // propagate the rest
-            throw beast::system_error{ec};
+            m_websocketStream->async_close(
+                websocket::close_code::normal,
+                beast::bind_front_handler(
+                    &WebsocketSession::onClose,
+                    shared_from_this(),
+                    callback
+                )
+            );
+        } else {
+            // already closed
+            LOG_TRACE("Websocket stream already closed.");
+
+            // release (must do it before triggering callback)
+            m_websocketStream.reset();
+
+            // callback
+            if (callback) {
+                callback();
+            }
         }
+    } else {
+        // protect against consecutive asyncDisconnect calls
+        LOG_TRACE("Websocket stream doesn't exist.");
 
-        // NOTE:
-        // Is is also stated that read op should be followed by close. It is when
-        // websocket::error::closed is received that the websocket has successfully closed.
-        // However, since I'm getting stream truncated error on close, this never happens
-        // (the websocket wasn't gracefully closed).
-        // So I'll just leave the draining code out for now.
-        //
-        // LOG_TRACE("Draining stream...");
-        // m_websocketStream->read(m_buffer, ec);
-        // while (ec != beast::websocket::error::closed) {
-        //     m_websocketStream->read(m_buffer, ec);
-        // }
-
-        // m_websocketStream->async_close(
-        //     websocket::close_code::normal,
-        //     beast::bind_front_handler(
-        //         &WebsocketSession::onClose,
-        //         shared_from_this()
-        //     )
-        // );
+        // callback
+        if (callback) {
+            callback();
+        }
     }
-
-    // release
-    m_websocketStream.reset();
 }
 
-void WebsocketSession::onClose(beast::error_code ec)
+void WebsocketSession::onClose(
+    std::function<void()> callback,
+    beast::error_code ec)
 {
-    if (ec) {
+    // NOTE:
+    // ssl::error::stream_truncated, also known as an SSL "short read",
+    // indicates the peer closed the connection without performing the
+    // required closing handshake (for example, Google does this to
+    // improve performance). Generally this can be a security issue,
+    // but if your communication protocol is self-terminated (as
+    // it is with both HTTP and WebSocket) then you may simply
+    // ignore the lack of close_notify.
+    //
+    // https://github.com/boostorg/beast/issues/38
+    //
+    // https://security.stackexchange.com/questions/91435/how-to-handle-a-malicious-ssl-tls-shutdown
+    //
+    // Is is also stated that read op should be followed by close. It is when
+    // websocket::error::closed is received that the websocket has successfully closed.
+    //
+    if (ec == net::ssl::error::stream_truncated) {
+        // Since stream truncated, we can't drain the stream because the
+        // operation will be cancelled.
+        LOG_DEBUG("Websocket stream closed.");
+
+        // release (must do it before triggering callback)
+        m_websocketStream.reset();
+
+        // callback
+        if (callback) {
+            callback();
+        }
+
+    } else if (ec) {
+        // this is error
         LOG_ERROR("Close failed. Error: {}", ec.message());
     } else {
-        LOG_DEBUG("Websocket successfully closed.");
+        // drain
+        LOG_TRACE("Draining websocket stream...");
+        m_websocketStream->async_read(
+            m_buffer,
+            beast::bind_front_handler(
+                &WebsocketSession::drainOnClose,
+                shared_from_this(),
+                callback
+            )
+        );
+    }
+}
+
+void WebsocketSession::drainOnClose(
+    std::function<void()> callback,
+    beast::error_code ec,
+    std::size_t  // not used
+)
+{
+    if (ec == beast::websocket::error::closed) {
+        // this indicates a successful close
+        LOG_DEBUG("Websocket stream gracefully closed.");
+
+        // release (must do it before triggering callback)
+        m_websocketStream.reset();
+
+        // callback
+        if (callback) {
+            callback();
+        }
+    } else if (ec) {
+        // this is error
+        LOG_ERROR("Unable to drain websocket stream. Error: {}", ec.message());
+    } else {
+        // recursive read
+        LOG_TRACE("Draining websocket stream...");
+        m_websocketStream->async_read(
+            m_buffer,
+            beast::bind_front_handler(
+                &WebsocketSession::drainOnClose,
+                shared_from_this(),
+                callback
+            )
+        );
     }
 }
 
@@ -448,7 +509,7 @@ void WebsocketSession::stopReceiverLoop()
 
         // this stops the receiver loop but DOESN'T
         // stop the message sender
-        // only disconnect does
+        // only asyncDisconnect does
         m_state.setFlag(CVState::RunReceiverLoop, false);
     } else {
         LOG_WARN("Receiver loop not running.");
@@ -519,14 +580,15 @@ void WebsocketSession::asyncReconnect()
 {
     LOG_DEBUG("Attempting reconnection to {}...", m_host);
 
-    // do some housekeeping
-    disconnect();
-    if (m_senderDaemon.joinable()) {
-        m_senderDaemon.join();
-    }
+    // disconnect then connect for a fresh restart
+    asyncDisconnect([self = shared_from_this()] {
+        if (self->m_senderDaemon.joinable()) {
+            self->m_senderDaemon.join();
+        }
 
-    // connect
-    asyncConnect(m_onReconnection);
+        // connect
+        self->asyncConnect(self->m_onReconnection);
+    });
 }
 
 bool WebsocketSession::isConnected() const
@@ -537,7 +599,7 @@ bool WebsocketSession::isConnected() const
 
 void WebsocketSession::shutdown()
 {
-    disconnect();
+    asyncDisconnect();
 }
 
 // -- sender daemon

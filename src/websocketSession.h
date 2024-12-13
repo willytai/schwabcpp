@@ -77,9 +77,6 @@ private:
                                                             std::function<void()> onFinalHandshake,
                                                             beast::error_code ec
                                                         );
-    void                                                onClose(
-                                                            beast::error_code ec
-                                                        );
     void                                                onRead(
                                                             std::function<void(const std::string&)> callback,
                                                             beast::error_code ec,
@@ -95,9 +92,17 @@ private:
                                                             beast::error_code ec,
                                                             std::size_t bytesTransferred
                                                         );
+    void                                                onClose(
+                                                            std::function<void()> callback,
+                                                            beast::error_code ec
+                                                        );
+    void                                                drainOnClose(
+                                                            std::function<void()> callback,
+                                                            beast::error_code ec,
+                                                            std::size_t bytesTransferred
+                                                        );
 
-    // this is sync
-    void                                                disconnect();
+    void                                                asyncDisconnect(std::function<void()> callback = {});
 
     // this is for reconnecting when the read loop fails
     void                                                asyncReconnect();
