@@ -81,6 +81,12 @@ void Streamer::onWebsocketReconnected()
 {
     // resubscribe the subscribed data after calling onWebsocketConnected
 
+    // also update the state (we are not logged in at this point -> inactive)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex_state);
+        m_state.setState(CVState::Inactive);
+    }
+
     onWebsocketConnected();
 
     LOG_DEBUG("Restoring subscription...");
