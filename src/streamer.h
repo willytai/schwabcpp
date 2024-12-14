@@ -24,10 +24,6 @@ class Client;
 //   The callback will be triggered when the request is actually sent.
 //
 // * TODO:
-//   Currently, the streamer streams the data to my global spdlog logger with the LOG_INFO level.
-//   Should change it so that it streams to the stream the client requested.
-//
-// * TODO:
 //   Create APIs to generate request for the supported subscriptions.
 //
 class Streamer
@@ -60,6 +56,8 @@ public:
 
     void                        setDataHandler(std::function<void(const std::string&)> handler) { m_dataHandler = handler; }
 
+    void                        updateStreamerInfo(const UserPreference::StreamerInfo& info);
+
     void                        subscribeLevelOneEquities(const std::vector<std::string>& tickers,
                                                           const std::vector<StreamerField::LevelOneEquity>& fields);
 
@@ -67,13 +65,17 @@ private:
     void                        onWebsocketConnected();
     void                        onWebsocketReconnected();
 
+    void                        startLoginAndReceiveProcedure();
+
     void                        asyncRequest(const std::string& request, std::function<void()> callback = {});
+
+    std::string                 constructLoginRequest() const;
 
     std::string                 constructStreamRequest(
                                     RequestServiceType service,
                                     RequestCommandType command,
                                     const RequestParametersType& parameters = {}
-                                );
+                                ) const;
 
     // convenience function
     // usage:
@@ -85,8 +87,8 @@ private:
     //          .
     //      )
     template<typename... Args>
-    std::string                 batchStreamRequests(Args... args) { return std::move(batchStreamRequests({args...})); }
-    std::string                 batchStreamRequests(const std::vector<std::string>& requests);
+    std::string                 batchStreamRequests(Args... args) const { return std::move(batchStreamRequests({args...})); }
+    std::string                 batchStreamRequests(const std::vector<std::string>& requests) const;
 
 private:
     // -- what the sender daemon runs
@@ -98,7 +100,7 @@ private:
 
     UserPreference::StreamerInfo
                                 m_streamerInfo;
-    size_t                      m_requestId;
+    mutable size_t              m_requestId;
 
     std::function<void(const std::string&)>
                                 m_dataHandler;

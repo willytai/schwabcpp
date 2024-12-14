@@ -59,10 +59,9 @@ public:
     void                                subscribeLevelOneEquities(const std::vector<std::string>& tickers,
                                                                   const std::vector<StreamerField::LevelOneEquity>& fields);
 
-    // --- getters to cached data, available if connection established
-    //     (These are not protected by mutex, but they don't change after being set so they should be thread safe)
+    // --- getters to cached data, available if connection established (thread-safe)
     std::vector<std::string>            getLinkedAccounts() const;
-    const UserPreference&               getUserPreference() const { return m_userPreference; }
+    UserPreference                      getUserPreference() const;
 
 private:
     // --- OAuth Flow ---
@@ -86,9 +85,14 @@ private:
     // --- Accessors for Streamer Class (Thread-Safe) ---
     friend class Streamer;
     std::string                         getAccessToken() const;
+    UserPreference::StreamerInfo        getStreamerInfo() const;
 
     // -- Token Checker Daemon's Job ---
     void                                checkTokensAndReauth();
+
+    // -- Helpers
+    void                                updateLinkedAccounts();
+    void                                updateUserPreference();
 
 private:
     // --- active tokens ---
@@ -102,8 +106,10 @@ private:
     std::string                         m_key;
     std::string                         m_secret;
 
-    // --- to protect access to the active tokens ---
-    mutable std::mutex                  m_mutex;
+    // --- to protect access to members ---
+    mutable std::mutex                  m_mutexTokens;
+    mutable std::mutex                  m_mutexLinkedAccounts;
+    mutable std::mutex                  m_mutexUserPreference;
 
     // --- token checker daemon ---
     Timer                               m_tokenCheckerDaemon;

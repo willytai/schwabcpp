@@ -25,7 +25,7 @@ Streamer::Streamer(Client* client)
 
     // get the streamer info
     try {
-        m_streamerInfo = m_client->getUserPreference().streamerInfo.front();
+        m_streamerInfo = m_client->getStreamerInfo();
         LOG_DEBUG("Streamer info copied.");
     } catch (...) {
         LOG_ERROR("Failed to retrieve streamer info.");
@@ -40,6 +40,13 @@ Streamer::~Streamer()
     if (m_requestDaemon.joinable()) {
         m_requestDaemon.join();
     }
+}
+
+void Streamer::updateStreamerInfo(const UserPreference::StreamerInfo& info)
+{
+    m_streamerInfo = info;
+
+    LOG_DEBUG("Streamer info updated.");
 }
 
 void Streamer::start()
@@ -62,72 +69,37 @@ void Streamer::start()
     m_requestDaemon = std::thread(
         [this] { sendRequests(); }
     );
-
-    // TEST: test subscription
-    // std::string testSubRequest1 = constructStreamRequest(
-    //     // RequestServiceType::LEVELONE_EQUITIES,
-    //     // RequestCommandType::SUBS,
-    //     // {
-    //     //     { "keys", "SPY" },
-    //     //     { "fields", "0,1,2,3,33"  },
-    //     // }
-    //         RequestServiceType::OPTIONS_BOOK,
-    //         RequestCommandType::SUBS,
-    //         {
-    //             { "keys", "NVDA  241220C00140000" },
-    //             { "fields", "0,1,2,3" },
-    //         }
-    // );
-    // std::string testSubRequest2 = batchStreamRequests(
-    //     constructStreamRequest(
-    //         RequestServiceType::LEVELONE_EQUITIES,
-    //         RequestCommandType::SUBS,
-    //         {
-    //             { "keys", "SPY" },
-    //             { "fields", "0,1,2,3,33"  },
-    //         }
-    //     )
-    //     // constructStreamRequest(
-    //     //     RequestServiceType::NASDAQ_BOOK,
-    //     //     RequestCommandType::ADD,
-    //     //     {
-    //     //         { "keys", "NVDA" },
-    //     //         { "fields", "0,1,2,3" },
-    //     //     }
-    //     // ),
-    //     // constructStreamRequest(
-    //     //     RequestServiceType::NYSE_BOOK,
-    //     //     RequestCommandType::ADD,
-    //     //     {
-    //     //         { "keys", "PLTR" },
-    //     //         { "fields", "0,1,2,3" },
-    //     //     }
-    //     // )
-    // );
-    // asyncRequest(testSubRequest1);
-    // asyncRequest(testSubRequest2);
 }
 
 void Streamer::onWebsocketConnected()
 {
-    LOG_TRACE("Websocket conncted callback triggered.");
+    // After websocket connected, we start the login and receive procedure
+    startLoginAndReceiveProcedure();
+}
 
-    // After websocket connected, we
+void Streamer::onWebsocketReconnected()
+{
+    // resubscribe the subscribed data after calling onWebsocketConnected
+
+    onWebsocketConnected();
+
+    LOG_DEBUG("Restoring subscription...");
+    for (const auto& request : m_subscriptionRecord) {
+        asyncRequest(request);
+    }
+}
+
+void Streamer::startLoginAndReceiveProcedure()
+{
     // 1. login
     // 2. start the receiving loop
 
-    std::string loginRequest = constructStreamRequest(
-        RequestServiceType::ADMIN,
-        RequestCommandType::LOGIN,
-        {
-            { "Authorization", m_client->getAccessToken() },
-            { "SchwabClientChannel", m_streamerInfo.schwabClientChannel },
-            { "SchwabClientFunctionId", m_streamerInfo.schwabClientFunctionId },
-        }
+    // queue the login request
+    m_websocket->asyncSend(
+        constructLoginRequest(),
+        [] { LOG_DEBUG("Streamer logging in..."); }
     );
 
-    // queue the login request
-    m_websocket->asyncSend(loginRequest, [](){ LOG_DEBUG("Streamer logging in..."); });
     // queue the login response handler
     m_websocket->asyncReceive(
         [this](const std::string& response) {
@@ -154,7 +126,12 @@ void Streamer::onWebsocketConnected()
                             int code = contentData["code"];
                             std::string msg = contentData["msg"];
                             if (code != 0) {
-                                LOG_ERROR("Login failed. Error code: {}, Msg: {}", code, msg);
+                                // failed, retry in 10 seconds
+                                LOG_ERROR("Login failed. Error code: {}, Msg: {}. (Retrying in 5 seconds...)", code, msg);
+
+                                // restart procedure
+                                std::this_thread::sleep_for(std::chrono::seconds(5));
+                                startLoginAndReceiveProcedure();
                             } else {
                                 LOG_DEBUG("Successfully logged in.");
 
@@ -174,18 +151,6 @@ void Streamer::onWebsocketConnected()
             }
         }
     );
-}
-
-void Streamer::onWebsocketReconnected()
-{
-    // resubscribe the subscribed data after calling onWebsocketConnected
-
-    onWebsocketConnected();
-
-    LOG_DEBUG("Restoring subscription...");
-    for (const auto& request : m_subscriptionRecord) {
-        asyncRequest(request);
-    }
 }
 
 void Streamer::subscribeLevelOneEquities(const std::vector<std::string>& tickers,
@@ -366,10 +331,24 @@ void Streamer::sendRequests()
     }
 }
 
+std::string Streamer::constructLoginRequest() const
+{
+    // TODO: make this thread safe
+    return constructStreamRequest(
+        RequestServiceType::ADMIN,
+        RequestCommandType::LOGIN,
+        {
+            { "Authorization", m_client->getAccessToken() },
+            { "SchwabClientChannel", m_streamerInfo.schwabClientChannel },
+            { "SchwabClientFunctionId", m_streamerInfo.schwabClientFunctionId },
+        }
+    );
+}
+
 std::string Streamer::constructStreamRequest(
     RequestServiceType service,
     RequestCommandType command,
-    const RequestParametersType& parameters)
+    const RequestParametersType& parameters) const
 {
     json requestJson;
 
@@ -388,7 +367,7 @@ std::string Streamer::constructStreamRequest(
     return std::move(requestJson.dump(-1));
 }
 
-std::string Streamer::batchStreamRequests(const std::vector<std::string>& requests)
+std::string Streamer::batchStreamRequests(const std::vector<std::string>& requests) const
 {
     // This batches the reuqests into a list with the key "requests"
     json requestJson;

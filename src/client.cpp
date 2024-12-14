@@ -1,4 +1,5 @@
 #include "client.h"
+#include "schema/userPreference.h"
 #include "streamer.h"
 #include "base64.hpp"
 #include "nlohmann/json.hpp"
@@ -139,31 +140,10 @@ bool Client::connect()
         LOG_INFO("Schwab client authorized.");
 
         // cache linked accounts info as this does not change after authorization
-        {
-            std::string url = s_traderAPIBaseUrl + "/accounts/accountNumbers";
-            std::vector<json> accountNumbersData = json::parse(syncRequest(url));
-            try {
-                for (const auto& data : accountNumbersData) {
-                    m_linkedAccounts[data.at("accountNumber")] = data.at("hashValue");
-                }
-
-                LOG_DEBUG("Linked accounts info cached.");
-            } catch (...) {
-                // TODO:
-            }
-        }
+        updateLinkedAccounts();
 
         // also cache user preference
-        {
-            std::string url = s_traderAPIBaseUrl + "/userPreference";
-            try {
-                json::parse(syncRequest(url)).get_to(m_userPreference);
-
-                LOG_DEBUG("User preference cached.");
-            } catch (...) {
-                // TODO:
-            }
-        }
+        updateUserPreference();
 
         // start the token checker daemon
         LOG_DEBUG("Launching token checker daemon...");
@@ -226,8 +206,11 @@ AccountSummary Client::accountSummary(const std::string& accountNumber)
     std::string finalUrl = s_traderAPIBaseUrl + "/accounts";
 
     // embed
-    if (m_linkedAccounts.contains(accountNumber)) {
-        finalUrl += "/" + m_linkedAccounts[accountNumber];
+    {
+        std::lock_guard lock(m_mutexLinkedAccounts);
+        if (m_linkedAccounts.contains(accountNumber)) {
+            finalUrl += "/" + m_linkedAccounts[accountNumber];
+        }
     }
 
     HttpRequestQueries queries = {
@@ -330,14 +313,45 @@ void Client::subscribeLevelOneEquities(const std::vector<std::string>& tickers,
     m_streamer->subscribeLevelOneEquities(tickers, fields);
 }
 
+// -- Thread Safe Accessors
 std::vector<std::string>
 Client::getLinkedAccounts() const
 {
+    std::lock_guard lock(m_mutexLinkedAccounts);
+
     std::vector<std::string> result;
     for (const auto& [key, _] : m_linkedAccounts) {
         result.push_back(key);
     }
     return std::move(result);
+}
+
+UserPreference
+Client::getUserPreference() const
+{
+    std::lock_guard lock(m_mutexUserPreference);
+
+    return m_userPreference;
+}
+
+std::string
+Client::getAccessToken() const
+{
+    std::lock_guard<std::mutex> guard(m_mutexTokens);
+    return m_accessToken;
+}
+
+UserPreference::StreamerInfo
+Client::getStreamerInfo() const
+{
+    std::lock_guard lock(m_mutexUserPreference);
+
+    try {
+        return m_userPreference.streamerInfo.front();
+    } catch (...) {
+        LOG_ERROR("Failed to retrieve streamer info.");
+        return UserPreference::StreamerInfo{};
+    }
 }
 
 // -- OAuth Flow
@@ -483,7 +497,7 @@ bool Client::writeTokens(AccessTokenResponse responseData)
     if (!responseData.isError) {
         // critical section
         {
-            std::lock_guard<std::mutex> guard(m_mutex);
+            std::lock_guard<std::mutex> guard(m_mutexTokens);
 
             m_accessToken    = responseData.data.accessToken;
             m_accessTokenTS  = clock::time_point(clock::duration(responseData.data.accessTokenTS));
@@ -521,7 +535,7 @@ bool Client::writeTokens(RefreshTokenResponse responseData)
 
         // critical section
         {
-            std::lock_guard<std::mutex> guard(m_mutex);
+            std::lock_guard<std::mutex> guard(m_mutexTokens);
 
             m_accessToken    = responseData.data.accessToken;
             m_accessTokenTS  = clock::time_point(clock::duration(responseData.data.accessTokenTS));
@@ -640,13 +654,6 @@ std::string Client::getAuthorizationCode(AuthRequestReason reason, int chances)
     return result;
 }
 
-// -- Thread Safe Accessors
-std::string Client::getAccessToken() const
-{
-    std::lock_guard<std::mutex> guard(m_mutex);
-    return m_accessToken;
-}
-
 void Client::checkTokensAndReauth()
 {
     // call updateTokens, rerun oauth if failed because expired
@@ -656,6 +663,12 @@ void Client::checkTokensAndReauth()
 
         case UpdateStatus::FailedExpired: {
             AuthStatus status = runOAuth(AuthRequestReason::RefreshTokenExpired);
+
+            // update cached info
+            if (status == AuthStatus::Succeeded) {
+                updateLinkedAccounts();
+                updateUserPreference();
+            }
 
             // create the event object
             OAuthCompleteEvent event(status);
@@ -685,8 +698,51 @@ void Client::checkTokensAndReauth()
 
         case UpdateStatus::Succeeded: {
             LOG_INFO("Successfuly updated tokens.");
+
+            // update preference
+            updateUserPreference();
+
             break;
         }
+    }
+}
+
+void Client::updateLinkedAccounts()
+{
+    std::string url = s_traderAPIBaseUrl + "/accounts/accountNumbers";
+    std::vector<json> accountNumbersData = json::parse(syncRequest(url));
+    try {
+        {
+            std::lock_guard lock(m_mutexLinkedAccounts);
+            for (const auto& data : accountNumbersData) {
+                m_linkedAccounts[data.at("accountNumber")] = data.at("hashValue");
+            }
+        }
+    
+        LOG_DEBUG("Linked accounts info cached.");
+    } catch (...) {
+        // TODO:
+    }
+}
+
+void Client::updateUserPreference()
+{
+    std::string url = s_traderAPIBaseUrl + "/userPreference";
+    try {
+        auto data = json::parse(syncRequest(url));
+        {
+            std::lock_guard lock(m_mutexUserPreference);
+            data.get_to(m_userPreference);
+        }
+    
+        LOG_DEBUG("User preference cached.");
+
+        // update streamer
+        if (m_streamer) {
+            m_streamer->updateStreamerInfo(getStreamerInfo());
+        }
+    } catch (...) {
+        // TODO:
     }
 }
 
