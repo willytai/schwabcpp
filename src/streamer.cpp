@@ -106,48 +106,56 @@ void Streamer::startLoginAndReceiveProcedure()
             LOG_TRACE("Login response: {}", response);
 
             // bunch of error handling
-            json responseData = json::parse(response);
-            if (!responseData.contains("response")) {
-                LOG_ERROR("No response received.");
-            } else {
-                responseData = responseData["response"];
-                if (!responseData.is_array()) {
-                    LOG_ERROR("Received corrupted login response.");
+            try {
+                json responseData = json::parse(response);
+                if (!responseData.contains("response")) {
+                    LOG_ERROR("No response received. (Will retry in 5 seconds...)");
                 } else {
-                    responseData = responseData.get<std::vector<json>>().at(0);
-                    if (!responseData.contains("content")) {
-                        LOG_ERROR("No content found in the login response.");
+                    responseData = responseData["response"];
+                    if (!responseData.is_array()) {
+                        LOG_ERROR("Received corrupted login response. (Will retry in 5 seconds...)");
                     } else {
-                        json contentData = responseData["content"];
-                        if (!contentData.contains("code") ||
-                            !contentData.contains("msg")) {
-                            LOG_ERROR("Login response contenet corrupted.");
+                        responseData = responseData.get<std::vector<json>>().at(0);
+                        if (!responseData.contains("content")) {
+                            LOG_ERROR("No content found in the login response. (Will retry in 5 seconds...)");
                         } else {
-                            int code = contentData["code"];
-                            std::string msg = contentData["msg"];
-                            if (code != 0) {
-                                // failed, retry in 10 seconds
-                                LOG_ERROR("Login failed. Error code: {}, Msg: {}. (Retrying in 5 seconds...)", code, msg);
-
-                                // restart procedure
-                                std::this_thread::sleep_for(std::chrono::seconds(5));
-                                startLoginAndReceiveProcedure();
+                            json contentData = responseData["content"];
+                            if (!contentData.contains("code") ||
+                                !contentData.contains("msg")) {
+                                LOG_ERROR("Login response contenet corrupted. (Will retry in 5 seconds...)");
                             } else {
-                                LOG_DEBUG("Successfully logged in.");
+                                int code = contentData["code"];
+                                std::string msg = contentData["msg"];
+                                if (code != 0) {
+                                    // failed, retry in 10 seconds
+                                    LOG_ERROR("Login failed. Error code: {}, Msg: {}. (Will retry in 5 seconds...)", code, msg);
+                                } else {
+                                    LOG_DEBUG("Successfully logged in.");
 
-                                // notify the status
-                                {
-                                    std::lock_guard<std::mutex> lock(m_mutex_state);
-                                    m_state.setState(CVState::Active);
-                                    m_cv.notify_all();
+                                    // notify the status
+                                    {
+                                        std::lock_guard<std::mutex> lock(m_mutex_state);
+                                        m_state.setState(CVState::Active);
+                                        m_cv.notify_all();
+                                    }
+
+                                    // now that we're logged in, start the receiver loop
+                                    m_websocket->startReceiverLoop(m_dataHandler);
                                 }
-
-                                // now that we're logged in, start the receiver loop
-                                m_websocket->startReceiverLoop(m_dataHandler);
                             }
                         }
                     }
                 }
+            } catch (const json::exception& e) {
+                LOG_ERROR("Unable to parse login response:  {}.  (Will retry in 5 seconds...)", e.what());
+            }
+
+            std::unique_lock lock(m_mutex_state);
+            if (!m_state.testState(CVState::Active)) {
+                lock.unlock();
+                // restart procedure if something failed
+                std::this_thread::sleep_for(std::chrono::seconds(5));
+                startLoginAndReceiveProcedure();
             }
         }
     );
