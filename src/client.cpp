@@ -347,9 +347,9 @@ Client::getStreamerInfo() const
     std::lock_guard lock(m_mutexUserPreference);
 
     try {
-        return m_userPreference.streamerInfo.front();
-    } catch (...) {
-        LOG_ERROR("Failed to retrieve streamer info.");
+        return m_userPreference.streamerInfo.at(0);
+    } catch (const std::exception& e) {
+        LOG_ERROR("Failed to retrieve streamer info: {}.", e.what());
         return UserPreference::StreamerInfo{};
     }
 }
@@ -710,8 +710,8 @@ void Client::checkTokensAndReauth()
 void Client::updateLinkedAccounts()
 {
     std::string url = s_traderAPIBaseUrl + "/accounts/accountNumbers";
-    std::vector<json> accountNumbersData = json::parse(syncRequest(url));
     try {
+        std::vector<json> accountNumbersData = json::parse(syncRequest(url));
         {
             std::lock_guard lock(m_mutexLinkedAccounts);
             for (const auto& data : accountNumbersData) {
@@ -722,6 +722,7 @@ void Client::updateLinkedAccounts()
         LOG_DEBUG("Linked accounts info cached.");
     } catch (...) {
         // TODO:
+        NOTIMPLEMENTEDERROR;
     }
 }
 
@@ -743,6 +744,7 @@ void Client::updateUserPreference()
         }
     } catch (...) {
         // TODO:
+        NOTIMPLEMENTEDERROR;
     }
 }
 
