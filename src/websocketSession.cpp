@@ -461,12 +461,16 @@ void WebsocketSession::onRead(
 {
     if (ec) {
         LOG_ERROR("Websocket read failed. Error: {}", ec.message());
+        // trigger callback with empty data
+        if (callback) {
+            callback("{}");
+        }
     } else {
         if (callback) {
             callback(beast::buffers_to_string(m_buffer.data()));
         }
-        m_buffer.clear();
     }
+    m_buffer.clear();
 }
 
 void WebsocketSession::startReceiverLoop(std::function<void(const std::string&)> callback)
