@@ -9,8 +9,11 @@
 #include "schwabcpp/event/oAuthUrlRequestEvent.h"
 #include "schwabcpp/schema/accessTokenResponse.h"
 #include "schwabcpp/schema/accountSummary.h"
+#include "schwabcpp/schema/candleList.h"
 #include "schwabcpp/schema/refreshTokenResponse.h"
 #include "schwabcpp/schema/userPreference.h"
+#include "schwabcpp/types/periodType.h"
+#include "schwabcpp/types/frequencyType.h"
 #include "schwabcpp/utils/timer.h"
 #include "schwabcpp/utils/clock.h"
 
@@ -51,9 +54,18 @@ public:
 
     // --- sync api --- (returns string response, user is responsible of parsing)
     using HttpRequestQueries = std::unordered_map<std::string, std::string>;
-    AccountSummary                      accountSummary(const std::string& accountNumber);
-    AccountsSummaryMap                  accountSummary();
-    std::string                         syncRequest(std::string url, HttpRequestQueries queries = {});  // common helper
+    AccountSummary                      accountSummary(const std::string& accountNumber) const;
+    AccountsSummaryMap                  accountSummary() const;
+    CandleList                          priceHistory(const std::string& ticker,
+                                                     PeriodType periodType,
+                                                     int period,
+                                                     FrequencyType frequencyType,
+                                                     int frequency,
+                                                     std::optional<clock::time_point> start,
+                                                     std::optional<clock::time_point> end,
+                                                     bool needExtendedHoursData,
+                                                     bool needPreviousClose
+                                                     ) const;
 
     // --- async api --- (mostly for interacting with the streamer)
     void                                subscribeLevelOneEquities(const std::vector<std::string>& tickers,
@@ -93,6 +105,8 @@ private:
     // -- Helpers
     void                                updateLinkedAccounts();
     void                                updateUserPreference();
+
+    std::string                         syncRequest(std::string url, HttpRequestQueries queries = {}) const;
 
 private:
     // --- active tokens ---

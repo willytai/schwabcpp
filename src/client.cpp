@@ -10,6 +10,7 @@
 #include <fstream>
 #include <chrono>
 #include <filesystem>
+#include <string>
 
 namespace schwabcpp {
 
@@ -56,6 +57,7 @@ void defaultOAuthCompleteCallback(OAuthCompleteEvent& event)
 
 const static std::string tokenCacheFile = ".tokens.json";
 const static std::string s_traderAPIBaseUrl = "https://api.schwabapi.com/trader/v1";
+const static std::string s_marketAPIBaseUrl = "https://api.schwabapi.com/marketdata/v1";
 
 }
 
@@ -201,7 +203,7 @@ void Client::setStreamerDataHandler(std::function<void(const std::string&)> hand
 }
 
 // -- sync api
-AccountSummary Client::accountSummary(const std::string& accountNumber)
+AccountSummary Client::accountSummary(const std::string& accountNumber) const
 {
     std::string finalUrl = s_traderAPIBaseUrl + "/accounts";
 
@@ -209,7 +211,7 @@ AccountSummary Client::accountSummary(const std::string& accountNumber)
     {
         std::lock_guard lock(m_mutexLinkedAccounts);
         if (m_linkedAccounts.contains(accountNumber)) {
-            finalUrl += "/" + m_linkedAccounts[accountNumber];
+            finalUrl += "/" + m_linkedAccounts.at(accountNumber);
         }
     }
 
@@ -227,7 +229,7 @@ AccountSummary Client::accountSummary(const std::string& accountNumber)
     ).get<AccountSummary>();
 }
 
-AccountsSummaryMap Client::accountSummary()
+AccountsSummaryMap Client::accountSummary() const
 {
     std::string finalUrl = s_traderAPIBaseUrl + "/accounts";
 
@@ -245,8 +247,45 @@ AccountsSummaryMap Client::accountSummary()
     ).get<AccountsSummaryMap>();
 }
 
+CandleList Client::priceHistory(const std::string& ticker,
+                                PeriodType periodType,
+                                int period,
+                                FrequencyType frequencyType,
+                                int frequency,
+                                std::optional<clock::time_point> start,
+                                std::optional<clock::time_point> end,
+                                bool needExtendedHoursData,
+                                bool needPreviousClose) const
+{
+    std::string finalUrl = s_marketAPIBaseUrl + "/pricehistory";
 
-std::string Client::syncRequest(std::string url, HttpRequestQueries queries)
+    HttpRequestQueries queries = {
+        {"symbol", ticker},
+        {"periodType", periodType.toString()},
+        {"period", std::to_string(period)},
+        {"frequencyType", frequencyType.toString()},
+        {"frequency", std::to_string(frequency)},
+        {"needExtendedHoursData", needExtendedHoursData ? "true" : "false"},
+        {"needPreviousClose", needPreviousClose ? "true" : "false"},
+    };
+
+    if (start.has_value()) {
+        queries.emplace("startDate", std::to_string(start.value().time_since_epoch().count()));
+    }
+    if (end.has_value()) {
+        queries.emplace("endDate", std::to_string(end.value().time_since_epoch().count()));
+    }
+
+    return json::parse(
+        std::move(
+            syncRequest(
+                finalUrl, std::move(queries)
+            )
+        )
+    ).get<CandleList>();
+}
+
+std::string Client::syncRequest(std::string url, HttpRequestQueries queries) const
 {
     // initialize to empty
     std::string response("{}");
@@ -269,6 +308,8 @@ std::string Client::syncRequest(std::string url, HttpRequestQueries queries)
             );
             url += "?" + queryString;
         }
+
+        LOG_TRACE("Request URL: {}", url);
 
         // set the url for the request
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());

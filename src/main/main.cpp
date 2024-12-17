@@ -6,6 +6,7 @@
 #include "spdlog/spdlog.h"
 #include <iostream>
 #include <fstream>
+#include <optional>
 
 // NOTE: <leader>uf toggles buffer auto foramtting
 
@@ -71,24 +72,38 @@ int main(int argc, char** argv) {
         std::cout << info.securitiesAccount.currentBalances.unsettledCash << std::endl;
         std::cout << info.securitiesAccount.isDayTrader << std::endl;
 
+        auto candles = client.priceHistory(
+            "SCHD",
+            schwabcpp::PeriodType::Day,
+            2,
+            schwabcpp::FrequencyType::Minute,
+            5,
+            std::nullopt,
+            schwabcpp::clock::now(),
+            true,
+            false
+        );
+        std::cout << json(candles).dump(2) << std::endl;
+        std::cout << candles.candles.size() << std::endl;
+
         // std::cout << info.dump() << std::endl;
 
         // std::this_thread::sleep_for(std::chrono::seconds(5));
 
-        client.subscribeLevelOneEquities(
-            {
-                "SCHD",
-                "RKLB",
-            },
-            {
-                // schwabcpp::StreamerField::LevelOneEquity::Symbol,
-                schwabcpp::StreamerField::LevelOneEquity::LastPrice,
-                schwabcpp::StreamerField::LevelOneEquity::OpenPrice,
-                schwabcpp::StreamerField::LevelOneEquity::ClosePrice,
-            }
-        );
+        // client.subscribeLevelOneEquities(
+        //     {
+        //         "SCHD",
+        //         "RKLB",
+        //     },
+        //     {
+        //         // schwabcpp::StreamerField::LevelOneEquity::Symbol,
+        //         schwabcpp::StreamerField::LevelOneEquity::LastPrice,
+        //         schwabcpp::StreamerField::LevelOneEquity::OpenPrice,
+        //         schwabcpp::StreamerField::LevelOneEquity::ClosePrice,
+        //     }
+        // );
 
-        client.startStreamer();
+        // client.startStreamer();
 
         // TEST: testing pause resume
         // {
@@ -99,9 +114,9 @@ int main(int argc, char** argv) {
         // }
 
         // std::this_thread::sleep_for(std::chrono::seconds(5));
-        std::this_thread::sleep_for(std::chrono::minutes(3));
+        // std::this_thread::sleep_for(std::chrono::minutes(3));
 
-        client.stopStreamer();
+        // client.stopStreamer();
 
         // std::this_thread::sleep_for(std::chrono::seconds(30));
     }
