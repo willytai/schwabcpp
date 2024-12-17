@@ -86,6 +86,9 @@ int main(int argc, char** argv) {
         std::cout << json(candles).dump(2) << std::endl;
         std::cout << candles.candles.size() << std::endl;
 
+        auto marketHours = client.marketHours(schwabcpp::MarketType::Equity);
+        std::cout << json(marketHours).dump(2) << std::endl;
+
         // std::cout << info.dump() << std::endl;
 
         // std::this_thread::sleep_for(std::chrono::seconds(5));

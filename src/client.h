@@ -10,8 +10,10 @@
 #include "schwabcpp/schema/accessTokenResponse.h"
 #include "schwabcpp/schema/accountSummary.h"
 #include "schwabcpp/schema/candleList.h"
+#include "schwabcpp/schema/marketHours.h"
 #include "schwabcpp/schema/refreshTokenResponse.h"
 #include "schwabcpp/schema/userPreference.h"
+#include "schwabcpp/types/marketType.h"
 #include "schwabcpp/types/periodType.h"
 #include "schwabcpp/types/frequencyType.h"
 #include "schwabcpp/utils/timer.h"
@@ -64,8 +66,8 @@ public:
                                                      std::optional<clock::time_point> start,
                                                      std::optional<clock::time_point> end,
                                                      bool needExtendedHoursData,
-                                                     bool needPreviousClose
-                                                     ) const;
+                                                     bool needPreviousClose) const;
+    MarketHours                         marketHours(MarketType marketType, std::optional<clock::time_point> date = std::nullopt) const;
 
     // --- async api --- (mostly for interacting with the streamer)
     void                                subscribeLevelOneEquities(const std::vector<std::string>& tickers,

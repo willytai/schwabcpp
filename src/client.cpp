@@ -285,6 +285,59 @@ CandleList Client::priceHistory(const std::string& ticker,
     ).get<CandleList>();
 }
 
+MarketHours Client::marketHours(MarketType marketType, std::optional<clock::time_point> date) const
+{
+    // NOTE:
+    // The API is returning garbage when market type is anything but Equity for some reason.
+    // Don't use the other!
+    std::string finalUrl = s_marketAPIBaseUrl + "/markets/" + marketType.toString();
+
+    // covert to time_t
+    std::time_t time = clock::to_time_t(date.value_or(clock::now()));
+
+    // local time
+    std::tm tm = *std::localtime(&time);
+
+    // format as YYYY-MM-DD
+    std::ostringstream oss;
+    oss << std::put_time(&tm, "%Y-%m-%d");
+
+    HttpRequestQueries queries = {
+        {"date", oss.str()},
+    };
+
+    // send
+    json response = json::parse(
+        std::move(
+            syncRequest(
+                finalUrl, std::move(queries)
+            )
+        )
+    );
+
+    // response is in the form of
+    // {
+    //     <marketType>: {
+    //         <product>: MarketHours
+    //         <product>: MarketHours
+    //         .
+    //         .
+    //     }
+    // }
+    //
+    // I'll retrieve the 1st data matching the market type
+    MarketHours result;
+    if (response.contains(marketType.toString())) {
+        auto matched = response[marketType.toString()];
+        for (auto it = matched.begin(); it != matched.end(); ++it) {
+            it.value().get_to(result);
+            break;
+        }
+    }
+
+    return std::move(result);
+}
+
 std::string Client::syncRequest(std::string url, HttpRequestQueries queries) const
 {
     // initialize to empty
