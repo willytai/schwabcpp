@@ -67,7 +67,7 @@ public:
                                                      std::optional<clock::time_point> end,
                                                      bool needExtendedHoursData,
                                                      bool needPreviousClose) const;
-    MarketHours                         marketHours(MarketType marketType, std::optional<clock::time_point> date = std::nullopt) const;
+    MarketHours                         marketHours(MarketType marketType, std::optional<clock::time_point> utc = std::nullopt) const;
 
     // --- async api --- (mostly for interacting with the streamer)
     void                                subscribeLevelOneEquities(const std::vector<std::string>& tickers,

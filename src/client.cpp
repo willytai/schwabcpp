@@ -285,7 +285,7 @@ CandleList Client::priceHistory(const std::string& ticker,
     ).get<CandleList>();
 }
 
-MarketHours Client::marketHours(MarketType marketType, std::optional<clock::time_point> date) const
+MarketHours Client::marketHours(MarketType marketType, std::optional<clock::time_point> utc) const
 {
     // NOTE:
     // The API is returning garbage when market type is anything but Equity for some reason.
@@ -293,10 +293,13 @@ MarketHours Client::marketHours(MarketType marketType, std::optional<clock::time
     std::string finalUrl = s_marketAPIBaseUrl + "/markets/" + marketType.toString();
 
     // covert to time_t
-    std::time_t time = clock::to_time_t(date.value_or(clock::now()));
+    std::time_t time = clock::to_time_t(utc.value_or(clock::now()));
 
-    // local time
-    std::tm tm = *std::localtime(&time);
+    // time zone offset for NY (UTC-5)
+    time += -5 * 3600;  // in seconds
+
+    // convert to local time in the target timezone
+    std::tm tm = *std::gmtime(&time);
 
     // format as YYYY-MM-DD
     std::ostringstream oss;
