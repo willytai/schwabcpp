@@ -52,6 +52,28 @@ public:
         });
     }
 
+    template<class Rep, class Period>
+    void runOnce(
+        const std::chrono::duration<Rep, Period>& delay,
+        std::function<void()> callback)
+    {
+        // stop if it's already running
+        std::unique_lock lock(m_mutex);
+        if (m_active) {
+            lock.unlock();
+            stop();
+        }
+
+        m_active = true;
+        m_timerThread = std::thread([this, delay, callback] {
+            std::unique_lock lock(m_mutex);
+            if (!m_cv.wait_for(lock, delay, [this] { return !m_active; })) {
+                // fire on timeout only
+                callback();
+            }
+        });
+    }
+
     void stop()
     {
         {
